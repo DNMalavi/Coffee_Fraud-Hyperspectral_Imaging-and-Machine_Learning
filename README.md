@@ -1,10 +1,4 @@
-## <center> Detection of Adulteration in Ground Cofee Via Hyperspectral Imaging, Machine Learning and Feature Selection </center>
-
-### **Model Subprojects**
-
-`To facilitate exploration`, `each model` and `related analysis` has been `documented in individual HTML files`. Access these subprojects from the GitHub page:
-
-**Project Link**: 
+## <center> Detection of Adulteration in Ground Cofee Via Hyperspectral Imaging, Machine Learning and Feature Selection </center> 
 
 **Purpose**: This structure allows focused examination of specific models and their performance under various preprocessing and feature selection methods.
 
@@ -16,9 +10,7 @@ This project aims to detect and quantify the adulteration of Arabica coffee with
 
 ### **Coffee Samples**:
 
-- 25 Arabica and 5 Robusta samples were sourced from major coffee-producing countries.
-
-- Coffee was roasted (medium roast, 15 minutes at 220°C), cooled overnight, and ground into fine powder.
+- Different samples of coffee (Arabica and Robusta) from top 10 leading producing countries. The samples were roasted and lyophilized. Comparison is made between ground and instant coffee. 
 
 ### **Adulteration Levels**:
 
