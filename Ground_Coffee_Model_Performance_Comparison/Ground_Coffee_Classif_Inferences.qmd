@@ -1,0 +1,1128 @@
+---
+title: "Comparative Analysis of Model Performance for Coffee Discrimination Using Hyperspectral Imaging and Machine Learning: Impact of Preprocessing and Variable Selection"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: "darkly"
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+execute: 
+  cache: true
+---
+
+## Introduction
+
+This document evaluates the performance of various classification models in detecting Arabica coffee adulteration with Robusta. The analysis focuses on key factors affecting model performance, including:
+
+```         
+- The type of classification model used.
+- Variable or wavelength selection methods, such as Boruta and Genetic Algorithms (GA).
+- The impact of spectral preprocessing techniques.
+- Comparison of models trained on balanced versus imbalanced datasets.
+```
+
+The models assessed in this study include Linear Discriminant Analysis (LDA), k-Nearest Neighbors (KNN), Support Vector Machines (SVM), Random Forest (RF), Neural Networks, and ensemble methods. The ensemble models were constructed using a stacking approach, where all the individual models served as base learners, and Random Forest acted as the meta-learner. Model performance was evaluated using the Matthews Correlation Coefficient (MCC), a robust metric particularly suitable for imbalanced data sets.
+
+## Load Packages
+
+```{r warning=FALSE}
+suppressWarnings(suppressMessages({
+  library(readxl)
+  library(readr)
+  library(tidyverse)
+  library(car)
+  library(PMCMRplus)
+  library(ggplot2)
+  library(tidyr)
+  library(dplyr)
+  library(skimr)
+  library(janitor)
+  library(lattice)
+  library(dunn.test)
+  library(ARTool)
+  library(emmeans)
+  library(ggpubr)
+}))
+```
+
+## Part 1: Assess Model Performance (External Validation Set): Based on type of model, variable selection & spectral pre-processing
+
+## Load and Visualize Data
+
+```{r}
+df <- read_excel('summary_model_results_classification_ground _coffee.xlsx',sheet = 'Model')
+
+head(df)
+
+# Change the independent variables to factors
+
+df$Model <- as.factor(df$Model)
+df$Pre_processing <- as.factor(df$Pre_processing)
+df$Wav_Selec_Reduction <- as.factor(df$Wav_Selec_Reduction)
+df$Imb_Balanced_Accuracy <- as.numeric(df$Imb_Balanced_Accuracy)
+df$Bal_Balanced_Accuracy <- as.numeric(df$Bal_Balanced_Accuracy)
+
+# column names 
+colnames(df)
+```
+
+## Check Distribution Using Histograms
+
+```{r warning=FALSE}
+# Unbalanced data
+histogram(df$Unbalanced_Data_MCC, 
+          main = 'MCC-Unbalanced Data', xlab = 'MCC',
+          cex.main = 1,col = 'lightblue')
+
+histogram(~Balanced_Data_MCC, data = df, 
+          main = 'MCC-Balanced Data',xlab = 'MCC', 
+          cex.main = 0.4, col = 'aquamarine4')
+
+```
+
+```{r warning=FALSE}
+qqnorm(df$Unbalanced_Data_MCC, 
+       main = 'Q-Q Plot MCC Unbalanced Data', col = "blue") # Unbalanced Data
+qqline(df$Unbalanced_Data_MCC)
+
+
+qqnorm(df$Balanced_Data_MCC, 
+       main = 'Q-Q Plot MCC Balanced Data', col = "red") # Unbalanced Data
+qqline(df$Unbalanced_Data_MCC)
+
+```
+
+-   Based on the histograms and quantile plots, the data is not normally distributed. This can be verified further by the **Shapiro- Wilke Test**.
+
+## Test for Normality
+
+```{r}
+shapiro.test(df$Unbalanced_Data_MCC) # for imbalanced data
+```
+
+```{r}
+shapiro.test(df$Balanced_Data_MCC) # Balanced Data
+```
+
+```{r}
+# Run ANOVA and check the normality of residuals # Unbalanced Data
+aov_model_1 <- aov(Unbalanced_Data_MCC~Model, data = df)
+
+# Check assumptions
+shapiro.test(residuals(aov_model_1))  # Normality
+leveneTest(Unbalanced_Data_MCC~Model, data = df)  # Variance homogeneity
+
+
+
+## Balanced (SMOTE)
+aov_model_2 <- aov(Balanced_Data_MCC~Model, data = df)
+shapiro.test(residuals(aov_model_2))  # Normality
+leveneTest(Balanced_Data_MCC~Model, data = df)
+```
+
+```{r}
+colnames(df)
+```
+
+-   The results of the Shapiro-Wilk test (for the residuals) are statistically significant (p < 0.05), providing strong evidence against the assumption of normality. This indicates that the data are not normally distribute. We will therefore consider non-parametric alternatives!
+
+## Check Performance based on Type of Model
+
+-   This section investigates the models k-NN, LDA, SVM, NNET, Random Forest and stacked models
+
+```{r warning=FALSE}
+# Visualize with box plots
+my_comparisons <- list(c('SVM','LDA'),c('NNET','LDA'),c('Ensemble','LDA'),
+                       c('NNET','k-NN'),c('Ensemble','k-NN'))
+                    
+                       
+# Imbalanced Data
+
+ggplot(data = df, aes(x = Model, y = Unbalanced_Data_MCC))+
+  geom_boxplot(aes(fill = Model))+
+  labs(title = 'Model Performance Comparison for Imbalanced Data (Ground Coffee)')+
+  ylab('MCC Score')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none'  
+  )+
+  scale_fill_brewer(palette = "Set3", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$Unbalanced_Data_MCC) * 2)
+
+ggsave("Model_No_SMOTE.png", width = 6, height = 4, dpi = 600, bg = "white")
+ 
+```
+
+
+
+```{r warning=FALSE}
+# Balanced Data
+
+# Visualize with box plots
+my_comparisons <- list(c('NNET','LDA'),
+                       c('Ensemble', 'LDA')
+                       )
+                      
+                    
+                       
+# Imbalanced Data
+
+ggplot(data = df, aes(x = Model, y = Balanced_Data_MCC))+
+  geom_boxplot(aes(fill = Model))+
+  labs(title = 'Model Performance Comparison for SMOTE Data (Ground Coffee)')+
+  ylab('MCC Score')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    panel.grid = element_blank(),
+    legend.position = 'none'  
+  )+
+  scale_fill_brewer(palette = "Set3", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$Balanced_Data_MCC) * 1.3)
+ 
+ggsave("Model_SMOTE.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+
+
+```{r}
+spec <- df %>% dplyr::select(Model,Bal_Specificty) %>% group_by(Model) %>% 
+  summarise(Mean_Specificity = mean(Bal_Specificty)) %>% arrange(Mean_Specificity)
+spec
+
+```
+
+
+## Perform Kruskall-Wallis Test for Model Types
+
+#### Imbalanced Data Set - Kruskall-Wallis Test
+
+```{r}
+kruskal.test(Unbalanced_Data_MCC~Model, data= df)
+```
+
+#### Balanced Data Set - Kruskall-Wallis Test
+
+```{r}
+kruskal.test(Balanced_Data_MCC~Model, data= df) 
+```
+
+-   There is statistical difference in performance for models trained with unbalanced data. We will examine the differences using the **Dunn Test** and **Bonferroni correction**, and later by GLM.
+
+#### Checking for differences in models trained on Unbalanced Data
+
+```{r}
+dunn.test(df$Unbalanced_Data_MCC, df$Model, method = 'bonferroni')
+```
+
+-   These comparisons indicate that the MCC values for LDA models differ significantly from those of the Ensemble and SVM models.
+
+## Check Performance based on Variable Selection
+
+-   The models were trained using the full spectra (224 variables) and feature selection methods, including Genetic Algorithm, Recursive Feature Elimination, and Boruta. Due to high collinearity among variables, further dimensionality reduction was performed using Principal Component Analysis (PCA).
+
+
+
+```{r}
+dunn.test(df$Balanced_Data_MCC, df$Model, method = 'bonferroni')
+```
+
+```{r}
+dunn.test(df$Bal_Specificty, df$Model, method = 'bonferroni')
+```
+
+```{r}
+# Visualize with box plots
+
+# Imbalanced Data
+
+df %>% ggplot(aes(x = Wav_Selec_Reduction, y = Unbalanced_Data_MCC))+
+  geom_boxplot(aes(fill = Wav_Selec_Reduction))+
+  labs(title = 'MCC-Imbalanced Data')+
+  theme(axis.title.x = element_text(color = "black",size= 9),
+        axis.text.x = element_text(color = "black", angle = 90, size= 9),
+        axis.text.y = element_text(color = "black",size =9),
+        axis.title.y = element_text(color = "black",size =9),
+        plot.title = element_text(hjust = 0.5, color = 'black', size = 12))+
+  scale_fill_brewer(palette = "Dark2", name = 'Variable Selection')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=2, color="red")
+```
+
+```{r warning=FALSE}
+# Visualize with box plots
+
+# Balanced Data
+my_comparisons <- list(c('Boruta_PCA','Full_Spectra_PCA'),
+                       c('Full_Spectra_PCA','RFE_GA_PCA'))
+
+df %>% ggplot(aes(x = Wav_Selec_Reduction, y = Bal_Balanced_Accuracy))+
+  geom_boxplot(aes(fill = Wav_Selec_Reduction))+
+  labs(title = 'MCC-Balanced Data')+
+  theme(axis.title.x = element_text(color = "black",size= 9),
+        axis.text.x = element_text(color = "black", angle = 90, size= 9),
+        axis.text.y = element_text(color = "black",size =9),
+        axis.title.y = element_text(color = "black",size =9),
+        plot.title = element_text(hjust = 0.5, color = 'black', size = 12))+
+  scale_fill_brewer(palette = "Paired", name = 'Variable Selection')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=2, color="red")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(method = 'anova', label.y =   max(df$Balanced_Data_MCC) * 1.5)
+```
+
+### Perform Kruskall-Wallis Test for Variable Selection
+
+#### Imbalanced Data Set - Kruskall-Wallis Test
+
+```{r}
+kruskal.test(Unbalanced_Data_MCC~Wav_Selec_Reduction, data= df) 
+```
+
+```{r}
+kruskal.test(Balanced_Data_MCC~Wav_Selec_Reduction, data= df)
+```
+
+-   There is no statistically significant difference in model performance based on variable selection methods (p > 0.05). This indicates that these techniques effectively identify variables or regions with useful information without compromising model performance. This will, however, be investigated further by General Linear Model (GLM).
+
+## Check Performance based on spectral preprocessing methods
+
+-   The hyperspectral imaging spectra were pre-processed using various techniques, including Standard Normal Variate (SNV) and Multiplicative Scatter Correction (MSC), combined with Savitzky-Golay filtering and derivatives. Unprocessed spectra were used as the baseline for comparison.
+
+```{r warning=FALSE}
+# Visualize with box plots
+
+# Imbalanced Data
+my_comparisons <- list(
+  c('MSC+SG+1D', 'Unprocessed'),
+  c('MSC+SG+2D', 'Unprocessed'),
+  c('SNV+SG+1D', 'Unprocessed'),
+  c('SNV+SG+2D', 'Unprocessed')
+)
+
+df %>% ggplot(aes(x = Pre_processing, y = Unbalanced_Data_MCC))+
+  geom_boxplot(aes(fill = Pre_processing))+
+  labs(title = 'Preprocessing-Imbalanced Data Ground Coffee',x = 'Spectral Pre-processing')+
+  ylab('MCC Score')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    panel.grid = element_blank(),
+    legend.position = 'none')+
+  scale_fill_brewer(palette = "Dark2", name = 'Preprocessing')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(method = 'kruskal.test', label.y = max(df$Unbalanced_Data_MCC) * 1.5)
+
+ggsave("MCC_Imbalanced_Data_Preprocessing.png", width = 6, height = 4, dpi = 600, bg = "white")
+
+```
+
+```{r warning=FALSE}
+# Visualize with box plots
+my_comparisons <- list(
+  c('MSC+SG+1D', 'Unprocessed'),
+  c('MSC+SG+2D', 'Unprocessed'),
+  c('SNV+SG+1D', 'Unprocessed'),
+  c('SNV+SG+2D', 'Unprocessed')
+)
+
+df %>% ggplot(aes(x = Pre_processing, y = Balanced_Data_MCC))+
+  geom_boxplot(aes(fill = Pre_processing))+
+  labs(title = 'Preprocessing-SMOTE Data Ground Coffee', x = 'Spectral Pre-processing')+
+  ylab('MCC Score')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    panel.grid = element_blank(),
+    legend.position = 'none')+
+  scale_fill_brewer(palette = "Dark2", name = 'Preprocessing')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$Unbalanced_Data_MCC) * 1.5)
+
+ggsave("MCC_SMOTE_Data_Preprocessing.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+### Perform Kruskall-Wallis Test for Spectral Preprocessing Techniques
+
+#### Imbalanced Data Set - Kruskall-Wallis Test
+
+```{r}
+kruskal.test(Unbalanced_Data_MCC~Pre_processing, data= df)
+```
+
+#### Balanced Data Set - Kruskall-Wallis Test
+
+```{r}
+kruskal.test(Balanced_Data_MCC~Pre_processing, data= df)
+```
+
+-   Spectral preprocessing significantly (p < 0.05) influences the performance of models.
+
+#### Checking for differences in pre-processing techniques for Unbalanced Data
+
+```{r}
+dunn.test(df$Unbalanced_Data_MCC, df$Pre_processing, method = 'bonferroni')
+```
+
+#### Checking for differences in pre-processing techniques for Balanced Data
+
+```{r}
+dunn.test(df$Balanced_Data_MCC, df$Pre_processing, method = 'bonferroni')
+```
+
+-   Models trained on spectra pre-processed using SNV+SG+1st derivative, SNV+SG+2nd derivative, MSC+SG+1st derivative, and MSC+SG+2nd derivative significantly outperformed those trained on raw, unprocessed spectra.
+
+### Does training on either imbalanced or Balanced Data set affect model performance?
+
+We will use Mann-Whitney U Test to check for differences in performance based on MCC and balanced accuracy.
+
+```{r}
+df_bal <- read_excel('summary_model_results_classification_ground _coffee.xlsx', sheet='data_balance')
+df_bal$data_balance <- as.factor(df_bal$data_balance)
+df_bal$Model <- as.factor(df_bal$Model)
+df_bal$Preprocessing<- as.factor(df_bal$Preprocessing)
+```
+
+
+```{r}
+# Define statistical comparisons
+my_comparisons <- list(c( "SMOTE","No_SMOTE"))
+
+# Create Boxplot
+
+df_bal %>% ggplot(aes(x = data_balance, y = Balanced_Accuracy, fill = data_balance)) +
+  geom_boxplot() +
+  labs(title = "Impact of SMOTE on Balanced Accuracy (Ground Coffee)",
+       y = "Model Balanced Accuracy")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.1)
+
+ggsave("SMOTE_Data_Balance_Ground_Coffee.png", width = 6, height = 4, dpi = 600, bg = "white")
+
+```
+
+```{r}
+# Define statistical comparisons
+my_comparisons <- list(c("No_SMOTE", "SMOTE"))
+
+# Create Boxplot
+
+df_bal %>% ggplot(aes(x = data_balance, y = Specificity, fill = data_balance)) +
+  geom_boxplot() +
+  labs(title = "Impact of SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.1)
+
+#ggsave("SMOTE_Data_Balance_Ground_Coffee.png", width = 6, height = 4, dpi = 600, bg = "white")
+
+```
+
+```{r}
+# Mean for specifity 
+spec_smote <- df_bal$Specificity[df_bal$data_balance=='SMOTE']
+mean(spec_smote)
+
+spec_no_smote <- df_bal$Specificity[df_bal$data_balance=='No_SMOTE']
+mean(spec_no_smote)
+```
+
+
+
+
+#### Check model performance with and without SMOTE
+
+
+```{r warning=FALSE}
+# SVM Model
+svm <- df_bal %>% 
+  filter(Model %in% c('SVM_No_SMOTE', 'SVM_SMOTE')) %>% 
+  dplyr::select(Model, MCC, Balanced_Accuracy, Specificity)
+head(svm)
+# Define statistical comparisons
+my_comparisons <- list(c('SVM_No_SMOTE', 'SVM_SMOTE'))
+
+# Create Boxplot
+
+svm %>% ggplot(aes(x = Model, y = Specificity, fill = Model)) +
+  geom_boxplot() +
+  labs(title = "Impact of SVM-SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Specificity) * 1.1)
+```
+
+
+
+```{r warning=FALSE}
+# LDA
+
+lda <- df_bal %>% 
+  filter(Model %in% c('LDA_No_SMOTE', 'LDA_SMOTE')) %>% 
+  dplyr::select(Model, MCC, Balanced_Accuracy, Specificity)
+
+
+# Define statistical comparisons
+my_comparisons <- list(c('LDA_No_SMOTE', 'LDA_SMOTE'))
+
+# Create Boxplot
+
+lda %>% ggplot(aes(x = Model, y = Specificity, fill = Model)) +
+  geom_boxplot() +
+  labs(title = "Impact of LDA-SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.1)
+```
+
+```{r warning=FALSE}
+# NNET
+rf <- df_bal %>% 
+  filter(Model %in% c('RF_No_SMOTE', 'RF_SMOTE')) %>% 
+  dplyr::select(Model, MCC, Balanced_Accuracy, Specificity)
+
+
+# Define statistical comparisons
+my_comparisons <- list(c('RF_No_SMOTE', 'RF_SMOTE'))
+
+# Create Boxplot
+
+rf %>% ggplot(aes(x = Model, y = Specificity, fill = Model)) +
+  geom_boxplot() +
+  labs(title = "Impact of RF-SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.1)
+```
+### Check preprocessing and SMOTE
+
+```{r warning=FALSE}
+
+# Define statistical comparisons
+my_comparisons <- list(c('Unprocessed_No_SMOTE', 'Unprocessed_SMOTE'),
+                       c('MSC+SG+1D_No_SMOTE', 'MSC+SG+1D_SMOTE'),
+                       c('MSC+SG+2D_No_SMOTE', 'MSC+SG+2D_SMOTE'),
+                       c('SNV+SG+1D_No_SMOTE', 'SNV+SG+1D_SMOTE'),
+                       c('SNV+SG+2D_No_SMOTE', 'SNV+SG+2D_SMOTE'))
+# Create Box plot
+
+df_bal %>% ggplot(aes(x = Preprocessing, y = Specificity, fill = Preprocessing)) +
+  geom_boxplot() +
+  labs(title = "Impact of SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme_bw()+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    panel.grid = element_blank(),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.4, "cm"),  
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size = 8)
+  )+
+  scale_fill_brewer(palette = "Spectral", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.5)
+ggsave("SMOTE_Data_Preprocessing_Balance_Ground_Coffee_Specifity.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+
+```{r warning=FALSE}
+# Define statistical comparisons
+my_comparisons <- list(c('Unprocessed_No_SMOTE', 'Unprocessed_SMOTE'),
+                       c('MSC+SG+1D_No_SMOTE', 'MSC+SG+1D_SMOTE'),
+                       c('MSC+SG+2D_No_SMOTE', 'MSC+SG+2D_SMOTE'),
+                       c('SNV+SG+1D_No_SMOTE', 'SNV+SG+1D_SMOTE'),
+                       c('SNV+SG+2D_No_SMOTE', 'SNV+SG+2D_SMOTE'))
+# Create Box plot
+
+df_bal %>% ggplot(aes(x = Preprocessing, y = Balanced_Accuracy, fill = Preprocessing)) +
+  geom_boxplot() +
+  labs(title = "Impact of SMOTE on Balanced Accuracy (Ground Coffee)",
+       y = "Model Balanced Accuracy")+
+  theme_bw()+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    panel.grid = element_blank(),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0,0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.4, "cm"),  
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size=8),
+    legend.spacing.y = unit(0.1,'lines'),
+    legend.key.height = unit(0.7,'lines')
+  )+
+  scale_fill_brewer(palette = "Spectral",name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.25)
+ggsave("SMOTE_Data_Preprocessing_Balance_Ground_Coffee_Accuracy.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+
+```{r warning=FALSE}
+knn <- df_bal %>% 
+  filter(Model %in% c('k-NN_No_SMOTE', 'k-NN_SMOTE')) %>% 
+  dplyr::select(Model, MCC, Balanced_Accuracy, Specificity)
+head(knn)
+
+# Define statistical comparisons
+my_comparisons <- list(c('k-NN_No_SMOTE', 'k-NN_SMOTE'))
+
+# Create Boxplot
+
+knn %>% ggplot(aes(x = Model, y = Specificity, fill = Model)) +
+  geom_boxplot() +
+  labs(title = "Impact of SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.1)
+```
+
+
+```{r}
+# Define statistical comparisons
+my_comparisons <- list(c("No_SMOTE", "SMOTE"))
+
+# Create Boxplot
+
+df_bal %>% ggplot(aes(x = data_balance, y = Specificity, fill = data_balance)) +
+  geom_boxplot() +
+  labs(title = "Impact of SMOTE on Specificity (Ground Coffee)",
+       y = "Model Specificity")+
+ theme(
+    axis.title.x = element_blank(),  
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = c(0.01, 0.009), 
+    legend.justification = c(0, 0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.5, "cm"),  
+    legend.text = element_text(size = 8)  
+  )+
+  scale_fill_brewer(palette = "Dark2", name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df_bal$Balanced_Accuracy) * 1.1)
+
+#ggsave("SMOTE_Data_Balance_Ground_Coffee.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+
+```{r}
+# Perform the Wilcoxon rank-sum test
+# Based on MCC
+overall_test <- wilcox.test(df$Unbalanced_Data_MCC, df$Balanced_Data_MCC)
+
+print(overall_test)
+
+
+# Based on Balanced Accuracy
+overall_bal_acc <- wilcox.test(df$Imb_Balanced_Accuracy, df$Bal_Balanced_Accuracy)
+
+# Print the results
+print(overall_bal_acc)
+```
+-   There is no statistical difference in balanced accuracy or MCC between the two groups although models trained with balanced data show improved balanced accuracy when tested on an external data set.
+
+```{r}
+mean_imbalanced <- mean(df$Imb_Balanced_Accuracy)
+mean_balanced <- mean(df$Bal_Balanced_Accuracy)
+
+print(paste('The mean balanced accuracy for imbalanced dataset is', round(mean_imbalanced, 2), 'while for the balanced dataset is', round(mean_balanced, 2)))
+```
+
+### Check SMOTE performance based on pre_processing
+
+
+
+### Verify with General Linear Model (GLM)
+
+#### Fit GLM-Unbalanced Data
+
+```{r}
+glm_model <- glm(Unbalanced_Data_MCC ~ Model + Pre_processing + Wav_Selec_Reduction, 
+                 data = df, 
+                 family = gaussian())
+summary(glm_model)
+
+```
+
+#### Pairwise comparisons-Unbalanced data
+
+```{r}
+# Pairwise comparisons for Model
+emmeans_model <- emmeans(glm_model, ~ Model)
+pairs(emmeans_model, adjust = "bonferroni")  # Bonferroni correction
+
+# Pairwise comparisons for Pre_processing
+emmeans_preprocessing <- emmeans(glm_model, ~ Pre_processing)
+pairs(emmeans_preprocessing, adjust = "bonferroni")
+
+# Pairwise comparisons for Wav_Selec_Reduction
+emmeans_wave <- emmeans(glm_model, ~ Wav_Selec_Reduction)
+pairs(emmeans_wave, adjust = "bonferroni")
+
+```
+
+#### Fit GLM-Balanced Data
+
+```{r}
+glm_model_bal <- glm(Balanced_Data_MCC ~ Model + Pre_processing + Wav_Selec_Reduction, 
+                 data = df, 
+                 family = gaussian())
+summary(glm_model_bal)
+
+```
+
+```{r}
+# Pairwise comparisons for Model
+emmeans_model_bal <- emmeans(glm_model_bal, ~ Model)
+pairs(emmeans_model_bal, adjust = "bonferroni")  # Bonferroni correction
+
+# Pairwise comparisons for Pre_processing
+emmeans_preprocessing_bal <- emmeans(glm_model_bal, ~ Pre_processing)
+pairs(emmeans_preprocessing_bal, adjust = "bonferroni")
+
+# Pairwise comparisons for Wav_Selec_Reduction
+emmeans_wave_bal <- emmeans(glm_model_bal, ~ Wav_Selec_Reduction)
+pairs(emmeans_wave_bal, adjust = "bonferroni")
+```
+
+```{r}
+# Group by some models
+
+Model_Means <- df %>%
+  dplyr::select(Model, Unbalanced_Data_MCC, Balanced_Data_MCC) %>%
+  group_by(Model) %>%
+  summarise(
+    Mean_Unbalanced_Data_MCC = mean(Unbalanced_Data_MCC, na.rm = TRUE),
+    Mean_Balanced_Data_MCC = mean(Balanced_Data_MCC, na.rm = TRUE)
+  ) %>% arrange(desc(Mean_Balanced_Data_MCC))
+
+# View the result
+print(Model_Means)
+```
+
+```{r}
+# Group Variable Selection MCC Averages
+model_means_var_selec <- df %>%
+  dplyr::select(Wav_Selec_Reduction, Unbalanced_Data_MCC, Balanced_Data_MCC,Bal_Balanced_Accuracy) %>%
+  group_by(Wav_Selec_Reduction) %>%
+  summarise(
+    Mean_Unbalanced_Data_MCC = mean(Unbalanced_Data_MCC, na.rm = TRUE),
+    Mean_Balanced_Data_MCC = mean(Balanced_Data_MCC, na.rm = TRUE),
+    Mean_Balanced_Data_Acc = mean(Bal_Balanced_Accuracy, na.rm = TRUE)
+  ) %>% arrange(desc(Mean_Balanced_Data_MCC))
+
+print(model_means_var_selec)
+```
+
+```{r}
+mcc_models<-df %>%
+  dplyr::select(Model, Unbalanced_Data_MCC, Balanced_Data_MCC, 
+         Imb_Balanced_Accuracy, Bal_Balanced_Accuracy, 
+         Imbal_Specificty, Bal_Specificty) %>%
+  group_by(Model) %>%
+  summarise(across(where(is.numeric), \(x) mean(x, na.rm = TRUE)))
+mcc_models
+```
+
+
+
+The GLM analysis on data balanced using SMOTE reveals intriguing insights. Stacked models and NNET demonstrate significantly superior performance compared to k-NN. Furthermore, spectral pre-processing has been validated as an effective approach to enhance model performance. Notably, feature selection using Boruta significantly outperforms models trained on full spectra data.
+
+## Part 1: Key Messages/Conclusions
+
+[**Superior Model Performance**]{.underline}: Stacked models and NNET consistently outperform k-NN in both balanced and unbalanced data sets, highlighting their effectiveness for coffee discrimination tasks.
+
+[**Impact of Spectral Pre-Processing**]{.underline}: Spectral pre-processing techniques, particularly SNV+SG (1^st^ and 2^nd^ derivatives) and MSC+SG (1^st^ and 2^nd^ derivatives), significantly enhance model performance compared to raw, unprocessed spectra.
+
+[**Effectiveness of Feature Selection**]{.underline}: Models trained with feature selection using Boruta outperform those trained on the full spectra, underscoring the importance of variable selection in improving classification accuracy.
+
+[**Balanced Data Insights**:]{.underline} While there is no statistical difference in balanced accuracy or MCC between balanced and unbalanced data, models trained on balanced data sets demonstrate improved balanced accuracy when tested on external data sets, emphasizing the value of data balancing through SMOTE.
+
+[**Validation of Pre-Processing and Data Balancing**]{.underline}: Both pre-processing and data balancing are confirmed as critical steps to achieve superior model performance, providing a roadmap for optimizing machine learning applications in hyperspectral data analysis.
+
+## Part 2: Assess Time Differences for Training  the Models
+
+```{r}
+df_time <- read_excel('model_training_time.xlsx')
+head(df_time)
+df_time$Model <- as.factor(df_time$Model) # convert to a factor
+df_time$Wav_Selec_Reduction <- as.factor(df_time$Wav_Selec_Reduction)
+```
+
+```{r}
+# Get the average/mean training time grouped by model type
+df_time %>% dplyr::select(Model,Imbalanced_Training_Time,Balanced_Training_Time) %>%
+  group_by(Model) %>% summarise(
+    Mean_Training_Time_Imbalanced = mean(Imbalanced_Training_Time),
+    Mean_Training_Time_Balanced = mean(Balanced_Training_Time)) %>% 
+  arrange(desc(Mean_Training_Time_Balanced))
+```
+
+```{r}
+# Get the average/mean training time grouped by variable selection
+df_time %>% dplyr::select(Wav_Selec_Reduction,Imbalanced_Training_Time,Balanced_Training_Time) %>%
+  group_by(Wav_Selec_Reduction) %>% summarise(
+    Mean_Training_Time_Imbalanced = mean(Imbalanced_Training_Time),
+    Mean_Training_Time_Balanced = mean(Balanced_Training_Time)) %>% 
+  arrange(desc(Mean_Training_Time_Balanced))
+```
+
+```{r warning=FALSE}
+# Visualizations
+
+# Training Time for Imbalanced Data based on type of model
+
+# Pairwise comparisons based on Bonferroni-corrected results
+my_comparisons <- list(
+  c("Ensemble","k-NN"), c("Ensemble","LDA"), c("Ensemble","RF"),
+  c("Ensemble","RF"),c("NNET","k-NN"),c("NNET","LDA"),c("NNET","RF"),
+  c("RF", "LDA"),c("SVM", "LDA"))
+
+# Boxplot with statistical comparisons
+ggplot(df_time, aes(x = Model, y = Imbalanced_Training_Time, fill = Model)) +
+geom_boxplot(alpha = 0.7) +
+ylab('Training Time (sec)')+
+labs(title = 'Training Time for Imbalanced Data Models')+
+theme_bw()+
+theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    panel.grid = element_blank(),
+    legend.position = 'none', 
+    legend.justification = c(0,0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.4, "cm"),  
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size=8),
+    legend.spacing.y = unit(0.1,'lines'),
+    legend.key.height = unit(0.7,'lines')
+  )+
+  scale_fill_brewer(palette = "Spectral",name = 'Data Balance')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons, label = 'p.signif')+
+  stat_compare_means(label.y = max(df_time$Imbalanced_Training_Time) * 2)
+ggsave("No_SMOTE_Data_Model_Training_Time.png", width = 6, height = 4, dpi = 600, bg = "white")
+
+```
+### Check the statistics
+
+```{r}
+dunn.test(df_time$Imbalanced_Training_Time, df_time$Model, method = 'bonferroni')
+```
+
+
+
+
+```{r warning=FALSE}
+library(ggthemes)
+# Pairwise comparisons based on Bonferroni-corrected results
+my_comparisons <- list(
+  c("Ensemble","k-NN"), c("Ensemble","LDA"), c("Ensemble","RF"),
+  c("Ensemble","RF"),c("NNET","k-NN"),c("NNET","LDA"),c("NNET","RF"),
+  c("RF", "LDA"),c("SVM", "LDA"),c('NNET','SVM'))
+
+# Boxplot with statistical comparisons
+ggplot(df_time, aes(x = Model, y = Balanced_Training_Time, fill = Model)) +
+geom_boxplot(alpha = 0.7) +
+ylab('Training Time (sec)')+
+labs(title = 'Training Time for Balanced Data Models')+
+theme_bw()+
+theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none', 
+    legend.justification = c(0,0),  
+    legend.background = element_rect(fill = "white", color = "black"),  
+    legend.key.size = unit(0.4, "cm"),  
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size=8),
+    legend.spacing.y = unit(0.1,'lines'),
+    legend.key.height = unit(0.7,'lines'),
+    panel.grid = element_blank(),
+  )+
+  scale_fill_brewer(palette = "Spectral",name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons, label = 'p.signif')+
+  stat_compare_means(label.y = max(df_time$Imbalanced_Training_Time) * 5)
+ggsave("SMOTE_Data_Model_Training_Time.png", width = 6, height = 4, dpi = 600, bg = "white")
+
+```
+
+```{r}
+dunn.test(df_time$Balanced_Training_Time, df_time$Model, method = 'bonferroni')
+```
+
+
+```{r}
+# Training Time for Imbalanced Data based on wavelength selection method
+
+df_time %>% ggplot(aes(x = Wav_Selec_Reduction, y = Imbalanced_Training_Time))+
+  geom_boxplot(aes(fill = Wav_Selec_Reduction))+
+  labs(title = 'Model Training Time: Imbalanced Data',
+       y = 'Training Time (sec)',
+       x = 'Model')+
+  theme(axis.title.x = element_text(color = "black",size= 9),
+        axis.text.x = element_text(color = "black", angle = 90, size= 9),
+        axis.text.y = element_text(color = "black",size =9),
+        axis.title.y = element_text(color = "black",size =9),
+        plot.title = element_text(hjust = 0.5, color = 'black', size = 10))+
+  scale_fill_brewer(palette = "BrBG", name = 'Variable Selection')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=2, color="red")
+```
+
+```{r}
+# Training Time for Balanced Data based on wavelength selection method
+
+df_time %>% ggplot(aes(x = Wav_Selec_Reduction, y = Balanced_Training_Time))+
+  geom_violin(aes(fill = Wav_Selec_Reduction))+
+  labs(title = 'Model Training Time: Imbalanced Data',
+       y = 'Training Time (sec)',
+       x = 'Model')+
+  theme(axis.title.x = element_text(color = "black",size= 9),
+        axis.text.x = element_text(color = "black", angle = 90, size= 9),
+        axis.text.y = element_text(color = "black",size =9),
+        axis.title.y = element_text(color = "black",size =9),
+        plot.title = element_text(hjust = 0.5, color = 'black', size = 10))+
+  scale_fill_brewer(palette = "RdBu", name = 'Variable Selection')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=2, color="red")
+```
+
+### Check differences with GLM Model
+
+```{r}
+colnames(df_time)
+```
+
+```{r}
+# Unbalanced data
+glm_time <- glm(Imbalanced_Training_Time~Model+Wav_Selec_Reduction,
+                family =gaussian(), data = df_time )
+print(summary(glm_time))
+```
+
+```{r}
+# Check pairwise comparisons
+
+# Pairwise comparisons for Model
+emmeans_model_imbal_time <- emmeans(glm_time, ~ Model)
+pairs(emmeans_model_imbal_time, adjust = "bonferroni")  # Bonferroni correction
+
+
+# Pairwise comparisons for Wav_Selec_Reduction
+emmeans_wave_imbal_time <- emmeans(glm_time, ~ Wav_Selec_Reduction)
+pairs(emmeans_wave_imbal_time, adjust = "bonferroni")
+```
+
+```{r}
+# Balanced data
+glm_time_bal <- glm(Balanced_Training_Time~Model+Wav_Selec_Reduction,
+                family =gaussian(), data = df_time )
+print(summary(glm_time_bal))
+```
+
+```{r}
+# Check pairwise comparisons for the SMOTE model
+
+# Pairwise comparisons for Model
+emmeans_model_bal_time <- emmeans(glm_time_bal, ~ Model)
+pairs(emmeans_model_bal_time, adjust = "bonferroni")  # Bonferroni correction
+
+```
+```{r}
+
+# Pairwise comparisons for Wav_Selec_Reduction
+emmeans_wave_bal_time <- emmeans(glm_time_bal, ~ Wav_Selec_Reduction)
+pairs(emmeans_wave_bal_time, adjust = "bonferroni")
+```
+
+```{r}
+df_time %>% select(Wav_Selec_Reduction,Imbalanced_Training_Time,Balanced_Training_Time) %>%
+  group_by(Wav_Selec_Reduction) %>% summarise(
+    Mean_Training_Time_Imbalanced = mean(Imbalanced_Training_Time),
+    Mean_Training_Time_Balanced = mean(Balanced_Training_Time)) %>% 
+  arrange(desc(Mean_Training_Time_Balanced))
+```
+## Part 2: Key Takeaways
+
+#### [**Model Training Time**]{.underline}:
+
+**Ensemble Models**: Have the longest training times for both unbalanced and balanced data, with further increases observed under balanced data due to the larger data set size.
+
+**NNET**: Significantly slower than simpler models (e.g., k-NN, LDA, RF, SVM) but faster than Ensemble models in both data sets.
+
+**Simpler Models (k-NN, LDA, RF, SVM)**: Maintain comparable and efficient training times in both data sets, making them ideal for time-sensitive applications
+
+#### [**Variable Selection**]{.underline}: 
+
+**Boruta_PCA**: Shows the most significant reduction in training time, especially for balanced data, making it the preferred method for large-scale data sets.
+
+**Full \_Spectra_PCA and RFE_GA_PCA**: Perform similarly in training time but are less efficient compared to Boruta_PCA when data sets are balanced.
+
+## Practical Recommendations
+
+[**Use Boruta_PCA for Variable Selection**:]{.underline}
+
+-   Variable selection with Boruta and subsequent reduction dimension by PCA is appropriate as significantly reduces training time without compromising performance.
+
+[**Balance Between Performance and Training Time**:]{.underline}
+
+-   Ensemble models and NNET can be utilized in discrimination tasks where time is not a constraint.
+
+-   Time sensitive analysis should opt for k-NN, LDA, LDA, RF or SVM as they offer shorter training times while maintaining competitive performance.
+
+[**SMOTE**]{.underline}
+
+-   While SMOTE improves model performance (as observed from the balanced accuracy), it increases training time for complex models. There should be a consideration between accuracy and computational efficiency.
