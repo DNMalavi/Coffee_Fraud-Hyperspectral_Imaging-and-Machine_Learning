@@ -1,0 +1,13 @@
+name: SpectraVision-Cost-Sensitive-Classifier
+title:
+username: dmalavi
+account: dmalavi
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14967247
+bundleId: 11222703
+url: https://dmalavi.shinyapps.io/SpectraVision-Cost-Sensitive-Classifier/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app_cost_sensitive_copy.R|Rprofile.R
