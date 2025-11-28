@@ -1,0 +1,13 @@
+name: SpectraQuant-Instant-Coffee
+title:
+username: dmalavi
+account: dmalavi
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14965099
+bundleId: 11222469
+url: https://dmalavi.shinyapps.io/SpectraQuant-Instant-Coffee/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app_copy.R
