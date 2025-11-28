@@ -1,0 +1,509 @@
+---
+title: "Detection of Coffee Adulteration Using Hyperspectral Imaging and Linear Discriminant Analysis (LDA): Spectra Preprocessed by Standard Normal Variate, Savitzky Golay and First Derivative (SNV+SG+1st Derivative)"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: 'darkly'
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+---
+
+## Introduction
+
+Coffee adulteration, such as mixing Arabica with cheaper Robusta, compromises quality and authenticity. **Linear Discriminant Analysis (LDA)** is a classical statistical method that finds linear boundaries to maximize the separation between classes, making it well-suited for high-dimensional spectroscopic data. This study evaluates the capability of LDA to accurately classify pure and adulterated coffee, demonstrating its potential as a reliable tool for detecting and quantifying coffee adulteration.
+
+```{r}
+# Load libraries
+warning = FALSE  
+  suppressWarnings(suppressMessages({    
+  library(caret) 
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(pls)   
+  library(janitor)  
+  library(class)   
+  library(MLmetrics) 
+  library(MLeval)  
+  library(themis)  
+  library(ROSE) 
+  library(parallel)    
+  library(doParallel)    
+  library(foreach)    
+  library(pheatmap)   
+  library(mdatools)    
+  library(nnet)
+  library(e1071) 
+  library(FactoMineR)
+  library(doSNOW)
+  library(MASS)
+  library(factoextra)
+  library(gridExtra)
+  library(pROC)
+  library(knitr)
+  library(kernlab)}))
+```
+
+## Load and inspect data: snv_sg_1d spectra
+
+```{r}
+hsi_snv_sg_1d <- read.csv("coffee_ground_snv_sg_1d.csv")
+
+# Ensure we have the same number of dimensions and the range of our columns/covariates
+dim(hsi_snv_sg_1d)
+
+# Check a few column names
+col_check <- colnames(hsi_snv_sg_1d[,c(1:6)])
+col_check
+# The spectral values start from column # 6-------> 229
+
+# Convert the class to a factor
+hsi_snv_sg_1d$binary_class <- as.factor(hsi_snv_sg_1d$binary_class)
+```
+
+```{r}
+# Get the X and y variables
+X <- hsi_snv_sg_1d[,c(6:229)]
+y <- hsi_snv_sg_1d[,2]
+```
+
+## Visualize X
+
+```{r}
+hist(as.matrix(X), col = 'lightblue',
+     main = 'Histogram of Spectral Intensity Values', xlab = 'Intensity'); box()                                    
+```
+
+## Split samples into training and test sets
+
+```{r}
+# Subset samples for cross-validation and external validation (70/30)
+# Record 1 under cal_val variable is for calibration while 2 will be for testing the model
+sample<-hsi_snv_sg_1d$cal_val== 1 
+
+# Split to train and test sets
+X_train <- X[sample,]
+X_test <- X[!sample,]
+y_train <-y[sample]
+y_test <- y[!sample]
+
+# Check length of the subsets for training and validation
+dim(X_train)
+dim(X_test)
+length(y_train)
+length(y_test)
+
+# Merge the test and train data
+train_data <- data.frame(X_train, binary_class = y_train)
+test_data <- data.frame(X_test, binary_class = y_test)
+
+# Chek composition of the y variable for both train and test sets
+table(train_data$binary_class)
+table(test_data$binary_class)
+```
+
+
+```{r}
+adult_test <- hsi_snv_sg_1d$adult_percent[!sample]
+length(adult_test)
+```
+
+
+```{r}
+# Create a bar plot for class distribution in train_data
+train_data %>%
+  count(binary_class) %>%
+  ggplot(aes(x = binary_class, y = n, fill = binary_class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution in Train Data",
+       x = "Class",
+       y = "Count") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Balance the data using SMOTE
+
+```{r}
+# Due to data imbalance, we will use SMOTE to balance the data set
+
+library(DMwR)
+
+# Combine the dataset
+smote_data <- SMOTE(binary_class ~ ., data = train_data,
+                    perc.over = 1900, perc.under = 100)
+
+# Check new class distribution
+table(smote_data$binary_class)
+
+# Extract the over sampled data
+X_train_smote <- smote_data[, -ncol(smote_data)]  
+y_train_smote <- smote_data$binary_class    
+```
+
+```{r}
+# Visualize the balanced data 
+
+smote_data %>%
+  count(binary_class) %>%
+  ggplot(aes(x = binary_class, y = n, fill = binary_class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution in SMOTE Train Data",
+       x = "Class",
+       y = "Count") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Apply PCA, Center and Scale Data
+
+```{r}
+#Reduction dimensionality with PCA to mitigate multicollinearity
+
+pca_Preprocess<- preProcess(train_data, method = c("center", "scale", "pca"))
+data_trainPreprocessed <- predict(pca_Preprocess, train_data)
+data_testPreprocessed <- predict(pca_Preprocess, test_data)
+
+#SMOTE data
+pca_Preprocess_smote<- preProcess(smote_data, method = c("center", "scale", "pca"))
+data_trainPreprocessed_smote <- predict(pca_Preprocess_smote, smote_data)
+data_testPreprocessed_smote <- predict(pca_Preprocess_smote, test_data)
+```
+
+## Set Up Training Parameters
+
+```{r}
+# Set random seed for reproducibility
+set.seed (123) 
+
+# Set up the training control(10 folds 10 times cross_validation)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 10, 
+                        classProbs = TRUE, savePredictions = "final", 
+                        summaryFunction = multiClassSummary,
+                        selectionFunction = 'oneSE', allowParallel = TRUE)
+```
+
+```{r}
+#Set the metric as accuracy 
+metric<-"Accuracy"
+```
+
+
+## Train the Models
+
+```{r cache=TRUE}
+# Set seed for reproducibility
+set.seed(123)
+# Start_time
+start_time<-Sys.time()
+
+#Train the model using cross-validation (10 folds, 10 times)
+fit_lda_snv_sg_1d<-train(y = data_trainPreprocessed[,1], x = data_trainPreprocessed[,-1], 
+                      method = 'lda', trControl = control, metric = 'Accuracy') #unmodified data
+#End_time
+end_time<-Sys.time()
+
+model_training_time<-end_time-start_time
+
+print(model_training_time) # Time taken to train the model
+```
+
+```{r}
+print(fit_lda_snv_sg_1d)
+```
+
+```{r cache=TRUE}
+
+set.seed(123) # Reproducibility
+
+# Start_time
+start_time<-Sys.time()
+
+# Fit the model
+fit_lda_smote_snv_sg_1d<-train(y = data_trainPreprocessed_smote[,1], x = data_trainPreprocessed_smote[,-1],
+                            method ='lda', trControl = control, metric = 'Accuracy')# SMOTE data
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+
+print(model_training_time)
+```
+
+```{r}
+print(fit_lda_smote_snv_sg_1d)
+```
+
+## Save the models for future use
+
+```{r}
+saveRDS(fit_lda_snv_sg_1d, "fit_lda_snv_sg_1d.rds")
+saveRDS(fit_lda_smote_snv_sg_1d, "fit_lda_smote_snv_sg_1d.rds")
+```
+
+
+## Display the cross-validation results in Tables
+
+
+```{r}
+kable(fit_lda_snv_sg_1d$results, caption = 'LDA Cross-Validation Results (Imbalanced Data)')
+```
+
+```{r}
+kable(fit_lda_smote_snv_sg_1d$results, caption = 'LDA Cross-Validation Results (SMOTE Data)')
+```
+
+## Confusion matrix for the training data
+
+```{r}
+confusionMatrix(fit_lda_snv_sg_1d$pred$pred,
+                fit_lda_snv_sg_1d$pred$obs) # unmodified data
+```
+
+
+```{r}
+confusionMatrix(fit_lda_smote_snv_sg_1d$pred$pred,fit_lda_smote_snv_sg_1d$pred$obs) # SMOTE data
+```
+
+## LDA Plot for Unmodified Data
+
+```{r}
+# Project training data onto LDA components # unmodified Data
+
+lda_projection <- predict(fit_lda_snv_sg_1d$finalModel, 
+                          data_trainPreprocessed[,-1])
+
+# Convert LDA results to a data frame
+lda_data <- data.frame(
+  Discriminant1 = lda_projection$x[, 1],
+  Class = data_trainPreprocessed[, 1])
+
+# Set the color and shape
+group_colors <- c("red", "blue")  
+group_shapes <- c(16, 17)  
+
+# Plot the data
+plot(lda_data$Discriminant1, 
+     col = group_colors[as.numeric(data_trainPreprocessed[, 1])],
+     pch = group_shapes[as.numeric(data_trainPreprocessed[, 1])],
+     xlab = "Class",
+     ylab = "Discriminant Function 1",
+     main = "LDA Projection SMOTE Data", cex.main = 1.0,
+     cex.axis = 0.8, cex.lab = 0.8, xaxt = "n")
+# Add a legend
+legend("bottomright", legend = levels(data_trainPreprocessed[, 1]),
+       col = group_colors, pch = group_shapes, title = "Classes", cex = 0.8)
+```
+
+## LDA Plot SMOTE Data
+
+```{r}
+# Project training data onto LDA components # SMOTE Data
+
+lda_projection <- predict(fit_lda_smote_snv_sg_1d$finalModel, 
+                          data_trainPreprocessed_smote[,-1])
+head(lda_data)
+
+# Convert LDA results to a data frame
+lda_data <- data.frame(
+  Discriminant1 = lda_projection$x[, 1],
+  Class = data_trainPreprocessed_smote[, 1])
+
+rownames(lda_data) <- NULL
+# Set the color and shape
+group_colors <- c("red", "blue")  
+group_shapes <- c(16, 17)  
+
+# Plot the data
+plot(lda_data$Discriminant1, 
+     col = group_colors[as.numeric(data_trainPreprocessed_smote[, 1])],
+     pch = group_shapes[as.numeric(data_trainPreprocessed_smote[, 1])],
+     xlab = "Class",
+     ylab = "Discriminant Function 1",
+     main = "LDA Projection", cex.main = 1.0,
+     cex.axis = 0.8, cex.lab = 0.8, xaxt = "n")
+# Add a legend
+legend("bottomright", legend = levels(data_trainPreprocessed_smote[, 1]),
+       col = group_colors, pch = group_shapes, title = "Classes", cex = 0.8)
+```
+
+
+
+
+## Test the model performance on test data for unbalanced trained data
+
+```{r}
+# Predict on the test set 
+
+test_lda_unmodified <- predict(fit_lda_snv_sg_1d,newdata=data_testPreprocessed)
+
+# Get the confusion matrix
+test_lda_unmodified_CMtrx <- confusionMatrix(test_lda_unmodified,
+                                             data_testPreprocessed$binary_class)
+test_lda_unmodified_CMtrx
+
+knitr::kable(test_lda_unmodified_CMtrx$byClass)
+
+#View the results as knitr table
+knitr::kable(test_lda_unmodified_CMtrx$table)
+
+# Calculate the Matthews Correlation coefficient 
+
+# Extracting the components of the confusion matrix
+cf_table_lda <- test_lda_unmodified_CMtrx$table
+TP <- cf_table_lda[1,1]
+TN <- cf_table_lda[2,2] 
+FP <- cf_table_lda[2,1] 
+FN <- cf_table_lda[1,2]
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+```
+
+## Test the model performance on test data using SMOTE trained model
+
+```{r}
+# Predict on the test set 
+
+test_lda_smote <- predict(fit_lda_smote_snv_sg_1d,newdata=data_testPreprocessed_smote)
+
+# Get the confusion matrix
+test_lda_smote_CMtrx <- confusionMatrix(test_lda_smote,
+                                             data_testPreprocessed_smote$binary_class)
+test_lda_smote_CMtrx
+
+knitr::kable(test_lda_smote_CMtrx$byClass)
+
+#View the results as knitr table
+knitr::kable(test_lda_smote_CMtrx$table)
+
+# Calculate the Matthews Correlation coefficient 
+
+# Extracting the components of the confusion matrix
+cf_table_lda_smote <- test_lda_smote_CMtrx$table
+TP <- cf_table_lda_smote[1,1]
+TN <- cf_table_lda_smote[2,2] 
+FP <- cf_table_lda_smote[2,1] 
+FN <- cf_table_lda_smote[1,2]
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+```
+
+##### Check misclassified samples based on percentage adulteration
+
+```{r}
+predicted <- test_lda_smote
+observed <- y_test
+percent_aldult <- adult_test
+
+df_pred <- as.data.frame(cbind(observed, predicted, percent_aldult))
+head(df_pred)
+
+misclassif <- df_pred %>%
+  filter(observed != predicted)
+
+misclassif
+```
+
+
+
+## Compare the models for unbalanced and balanced data
+
+```{r}
+library(knitr)
+# Compare model performance
+results <- resamples(list(lda = fit_lda_snv_sg_1d, lda_smote = fit_lda_smote_snv_sg_1d))
+
+# Print summary of re-sampling results
+resample_summary <- summary(results)$statistics
+
+# Convert resampling statistics to a data frame
+resample_df <- do.call(rbind, lapply(resample_summary, function(x) x[, "Mean", drop = FALSE]))
+
+# Create a neat table
+kable(resample_df, caption = "Model Performance Metrics")
+
+# Boxplot for accuracy comparison
+bwplot(results)
+
+# Pairwise comparisons
+model_differences <- diff(results)
+model_differences$statistics
+
+```
+
+## Visualize the confusion matrix tables
+
+```{r}
+p1<-ggplot(data = as.data.frame(test_lda_unmodified_CMtrx$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix lda Unbalanced Data')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+p2<-ggplot(data = as.data.frame(test_lda_smote_CMtrx$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix lda with SMOTE')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+grid.arrange(p1,p2, nrow =1)
+```
+
+## ROC Curve
+
+```{r}
+#SMOTE data
+# Generate the ROC curve
+roc_curve <- roc(data_testPreprocessed_smote$binary_class,
+                 as.numeric(test_lda_smote),
+                 levels = c("adulterated", "pure_arabica"),
+                 positive = 'adulterated')
+```
+
+```{r}
+# Calculate the AUC
+auc_value <- auc(roc_curve)
+
+# Plot the ROC curve
+plot(roc_curve, col = 'blue', lwd = 2,
+     main = paste("ROC Curve (AUC =", round(auc_value, 2), ")"),
+     xlab = "False Positive Rate (1 - Specificity)",
+     ylab = "True Positive Rate (Sensitivity)",
+     xlim = c(0, 1), ylim = c(0, 1))  
+abline(a = 0, b = 1, lty = 2, col = "black")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "dotted")  
+legend("bottomright", legend = c("LDA"), col = 'blue', lwd = 3)
+```
+## Conclusion
+The LDA shows good performance. The models excel at accurately identifying pure Arabica coffee as observed from the high specificity.

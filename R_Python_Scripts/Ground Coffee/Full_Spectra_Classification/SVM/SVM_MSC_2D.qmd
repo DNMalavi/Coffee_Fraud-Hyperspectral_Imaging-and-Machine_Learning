@@ -1,0 +1,492 @@
+---
+title: "Detection of Coffee Adulteration Using Hyperspectral Imaging and Support Vectors Machine (SVM): Spectra Preprocessed by MSC, Savitzky Golay and Second Derivative (MSC+SG+2nd Derivative)"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: 'darkly'
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+---
+
+## Introduction
+
+This project aims to distinguish authentic coffee from adulterated samples using Support Vector Machines (SVM), a powerful machine learning algorithm known for its effectiveness in handling complex classification tasks. By analyzing spectral data, the model will identify key features that differentiate pure coffee from blends with varying levels of adulteration, ensuring high accuracy and reliability in detection.
+
+```{r}
+# Load libraries
+warning = FALSE  
+  suppressWarnings(suppressMessages({    
+  library(caret) 
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(pls)   
+  library(janitor)  
+  library(class)   
+  library(MLmetrics) 
+  library(MLeval)  
+  library(themis)  
+  library(ROSE) 
+  library(parallel)    
+  library(doParallel)    
+  library(foreach)    
+  library(pheatmap)   
+  library(mdatools)    
+  library(nnet)
+  library(e1071) 
+  library(FactoMineR)
+  library(doSNOW)
+  library(MASS)
+  library(pROC)
+  library(factoextra)
+  library(gridExtra)
+  library(kernlab)}))
+```
+
+## Load and inspect data: msc_sg_2d spectra
+
+```{r}
+hsi_msc_sg_2d <- read.csv("coffee_ground_msc_sg_2d.csv")
+
+# Ensure we have the same number of dimensions and the range of our columns/covariates
+dim(hsi_msc_sg_2d)
+
+# Check a few column names
+col_check <- colnames(hsi_msc_sg_2d[,c(1:6)])
+col_check
+# The spectral values start from column # 6-------> 229
+
+# Convert the class to a factor
+hsi_msc_sg_2d$binary_class <- as.factor(hsi_msc_sg_2d$binary_class)
+```
+
+```{r}
+# Get the X and y variables
+X <- hsi_msc_sg_2d[,c(6:229)]
+y <- hsi_msc_sg_2d[,2]
+```
+
+## Visualize X
+
+```{r}
+hist(as.matrix(X), col = 'lightblue', freq = FALSE,
+     main = 'Histogram of Spectral Intensity Values', 
+     xlab = 'Intensity'); box()
+```
+
+
+## Split samples into training and test sets
+
+```{r}
+# Subset samples for cross-validation and external validation (70/30)
+# Record 1 under cal_val variable is for calibration while 2 will be for testing the model
+
+sample<-hsi_msc_sg_2d$cal_val== 1 
+
+# Split to train and test sets
+X_train <- X[sample,]
+X_test <- X[!sample,]
+y_train <-y[sample]
+y_test <- y[!sample]
+
+# Check length of the subsets for training and validation
+dim(X_train)
+dim(X_test)
+length(y_train)
+length(y_test)
+
+# Merge the test and train data
+train_data <- data.frame(X_train, binary_class = y_train)
+test_data <- data.frame(X_test, binary_class = y_test)
+
+# Check composition of the y variable for both train and test sets
+table(train_data$binary_class)
+table(test_data$binary_class)
+```
+
+```{r}
+# Create a bar plot for class distribution in train_data
+train_data %>%
+  count(binary_class) %>%
+  ggplot(aes(x = binary_class, y = n, fill = binary_class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution in Train Data",
+       x = "Class",
+       y = "Count") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Balance the data using SMOTE
+
+```{r}
+# Due to data imbalance, we will use SMOTE to balance the data set
+
+library(DMwR)
+
+# Combine the dataset
+smote_data <- SMOTE(binary_class ~ ., data = train_data,
+                    perc.over = 1900, perc.under = 100)
+
+# Check new class distribution
+table(smote_data$binary_class)
+
+# Extract the over sampled data
+X_train_smote <- smote_data[, -ncol(smote_data)]  
+y_train_smote <- smote_data$binary_class    
+```
+
+```{r}
+# Visualize the balanced data 
+
+smote_data %>%
+  count(binary_class) %>%
+  ggplot(aes(x = binary_class, y = n, fill = binary_class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution in SMOTE Train Data",
+       x = "Class",
+       y = "Count") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Reduction Dimensional (PCA), Centering and Scaling Data
+
+```{r}
+# Reduction dimensionality to eliminate collinearity, centering and scaling
+
+# Imabalanced Data
+pca_Preprocess<- preProcess(train_data, method = c("center", "scale", "pca"))
+data_trainPreprocessed <- predict(pca_Preprocess, train_data)
+data_testPreprocessed <- predict(pca_Preprocess, test_data)
+
+#SMOTE data
+pca_Preprocess_smote<- preProcess(smote_data, method = c("center", "scale", "pca"))
+data_trainPreprocessed_smote <- predict(pca_Preprocess_smote, smote_data)
+data_testPreprocessed_smote <- predict(pca_Preprocess_smote, test_data)
+```
+
+## Set Up Training Parameters
+
+```{r}
+# Set random seed for reproducibility
+
+set.seed (123) 
+
+# Set up the training control(10 folds 10 times cross_validation)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 10, 
+                        classProbs = TRUE, savePredictions = "final", 
+                        summaryFunction = multiClassSummary,
+                        selectionFunction = 'oneSE', allowParallel = TRUE)
+
+# OneSE rule will be used to select simplest yet optimal model within the 'best model'
+```
+
+```{r}
+#Set the metric as accuracy 
+metric<-"Accuracy"
+```
+
+```{r}
+# Detect the number of cores
+num_cores <- detectCores()
+# Print the number of cores
+print(paste("Number of cores available:", num_cores))
+```
+
+```{r}
+# Hyperparameter Tuning
+# We will use tuneLength to automatically determine the optimal parameters 
+```
+
+## Train the Models
+
+```{r cache=TRUE}
+
+#Register cluster for caret to train the models in parallel
+set.seed(123)
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+# Start_time
+start_time<-Sys.time()
+
+#Train the model using cross-validation (10 folds, 10 times)
+fit_svm_msc_sg_2d<-train(binary_class~., data = data_trainPreprocessed, 
+                      method = 'svmRadial', tuneLength = 10, 
+                      trControl = control, metric = 'Accuracy') #unmodified data
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl) # Stop the parallel run cluster
+
+print(model_training_time)
+```
+
+
+```{r}
+print(fit_svm_msc_sg_2d)
+```
+
+```{r cache=TRUE}
+
+#Register cluster for caret to train the models in parallel
+set.seed(123)
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+fit_svm_smote_msc_sg_2d<-train(binary_class~., data = data_trainPreprocessed_smote,
+                            method ='svmRadial',tuneLength = 10, 
+                            trControl = control, metric = 'Accuracy')# SMOTE data
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl) # Stop the parallel run cluster
+
+print(model_training_time)
+
+```
+
+```{r}
+print(fit_svm_smote_msc_sg_2d)
+```
+
+## Save the models for future use
+
+```{r}
+saveRDS(fit_svm_msc_sg_2d, "fit_svm_msc_sg_2d.rds")
+saveRDS(fit_svm_smote_msc_sg_2d, "fit_svm_smote_msc_sg_2d.rds")
+```
+
+## Plot the cross-validation results ----> Model selection
+
+```{r}
+# Imbalanced Data
+fit_svm_msc_sg_2d
+C_data<-fit_svm_msc_sg_2d$results
+best_C = fit_svm_msc_sg_2d$bestTune$C
+y_Acc = C_data$Accuracy[C_data$C == best_C]
+plot(C_data$C,C_data$Accuracy, type = "b",col = "red",pch = 20,cex.axis = 0.8, 
+     xlab = "Cost", ylab = "Accuracy (%)",cex.lab = 0.9)
+# Add line from x-axis to the specific point
+segments(x0 = best_C, y0 = 0, x1 = best_C, y1 = y_Acc, col = "black", lty = 2)
+
+# Add line from y-axis to the specific point
+segments(x0 = 0, y0 = y_Acc, x1 = best_C, y1 = y_Acc, col = "black", lty = 2)
+```
+
+```{r}
+# Balanced Data
+
+fit_svm_smote_msc_sg_2d
+C_data<-fit_svm_smote_msc_sg_2d$results
+best_C = fit_svm_smote_msc_sg_2d$bestTune$C
+y_Acc = C_data$Accuracy[C_data$C == best_C]
+plot(C_data$C,C_data$Accuracy, type = "b",col = "blue",pch = 20,cex.axis = 0.8, 
+     xlab = "Cost", ylab = "Accuracy (%)",cex.lab = 0.9,ylim = c(0,1))
+# Add line from x-axis to the specific point
+segments(x0 = best_C, y0 = 0, x1 = best_C, y1 = y_Acc, col = "black", lty = 2)
+
+# Add line from y-axis to the specific point
+segments(x0 = 0, y0 = y_Acc, x1 = best_C, y1 = y_Acc, col = "black", lty = 2)
+```
+
+## Display the cross-validation results
+
+```{r}
+print(paste('The optimal parametrers for training the SVM model are sigma value of', round(as.numeric(fit_svm_msc_sg_2d$bestTune$sigma),2), 'and Cost parameter of', fit_svm_msc_sg_2d$bestTune$C)) # unmodified data 
+
+print(paste('The optimal parametrers for training the SVM model are sigma value of', round(as.numeric(fit_svm_smote_msc_sg_2d$bestTune$sigma),2), 'and Cost parameter of', fit_svm_smote_msc_sg_2d$bestTune$C)) # SMOTE data 
+```
+
+\#
+
+```{r}
+# Imbalanced data
+knitr::kable(fit_svm_msc_sg_2d$results)
+```
+
+```{r}
+# Select the best results row 
+selected_row <- fit_svm_msc_sg_2d$results %>% filter(C==as.numeric(fit_svm_msc_sg_2d$bestTune$C))
+
+knitr::kable(selected_row)
+```
+
+```{r}
+# SMOTE Data
+knitr::kable(fit_svm_smote_msc_sg_2d$results)
+
+```
+
+```{r}
+# Select the best results row 
+selected_row_smote <- fit_svm_smote_msc_sg_2d$results %>% filter(C==as.numeric(fit_svm_smote_msc_sg_2d$bestTune$C))
+
+knitr::kable(selected_row_smote)
+```
+
+## Confusion matrix for the training data
+
+```{r}
+confusionMatrix(fit_svm_msc_sg_2d$pred$pred,fit_svm_msc_sg_2d$pred$obs) # unmodified data
+```
+
+```{r}
+confusionMatrix(fit_svm_smote_msc_sg_2d$pred$pred,fit_svm_smote_msc_sg_2d$pred$obs) # SMOTE data
+```
+
+## Test the model performance on test data for unbalanced trained data
+
+```{r}
+# Predict on the test set 
+set.seed(123)
+test_svm_unmodified <- predict(fit_svm_msc_sg_2d,newdata=data_testPreprocessed)
+
+# Get the confusion matrix
+test_svm_unmodified_CMtrx <- confusionMatrix(test_svm_unmodified,
+                                             data_testPreprocessed$binary_class)
+test_svm_unmodified_CMtrx
+
+knitr::kable(test_svm_unmodified_CMtrx$byClass)
+
+#View the results as knitr table
+knitr::kable(test_svm_unmodified_CMtrx$table)
+
+# Calculate the Matthews Correlation coefficient 
+
+# Extracting the components of the confusion matrix
+cf_table_svm <- test_svm_unmodified_CMtrx$table
+TP <- cf_table_svm[1,1]
+TN <- cf_table_svm[2,2] 
+FP <- cf_table_svm[2,1] 
+FN <- cf_table_svm[1,2]
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+```
+
+## Test the model performance on test data using SMOTE trained model
+
+```{r}
+# Predict on the test set 
+set.seed(123)
+test_svm_smote <- predict(fit_svm_smote_msc_sg_2d,newdata=data_testPreprocessed_smote)
+
+# Get the confusion matrix
+test_svm_smote_CMtrx <- confusionMatrix(test_svm_smote,
+                                             data_testPreprocessed_smote$binary_class)
+test_svm_smote_CMtrx
+
+knitr::kable(test_svm_smote_CMtrx$byClass)
+
+#View the results as knitr table
+knitr::kable(test_svm_smote_CMtrx$table)
+
+# Calculate the Matthews Correlation coefficient 
+
+# Extracting the components of the confusion matrix
+cf_table_svm_smote <- test_svm_smote_CMtrx$table
+TP <- cf_table_svm_smote[1,1]
+TN <- cf_table_svm_smote[2,2] 
+FP <- cf_table_svm_smote[2,1] 
+FN <- cf_table_svm_smote[1,2]
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+```
+
+## Compare the models for unbalanced and balanced data
+
+```{r}
+library(knitr)
+# Compare model performance
+results <- resamples(list(svm = fit_svm_msc_sg_2d, svm_smote = fit_svm_smote_msc_sg_2d))
+
+# Print summary of re-sampling results
+resample_summary <- summary(results)$statistics
+
+# Convert resampling statistics to a data frame
+resample_df <- do.call(rbind, lapply(resample_summary, function(x) x[, "Mean", drop = FALSE]))
+
+# Create a neat table
+kable(resample_df, caption = "Model Performance Metrics")
+
+# Boxplot for accuracy comparison
+bwplot(results)
+
+# Pairwise comparisons
+model_differences <- diff(results)
+model_differences$statistics
+
+```
+
+## Visualize the confusion matrix tables
+
+```{r}
+p1<-ggplot(data = as.data.frame(test_svm_unmodified_CMtrx$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix SVM Unbalanced Data')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+p2<-ggplot(data = as.data.frame(test_svm_smote_CMtrx$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix SVM with SMOTE')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+grid.arrange(p1,p2, nrow =1)
+```
+
+## ROC Curve
+```{r}
+#SMOTE data
+roc_curve <- roc(data_testPreprocessed_smote$binary_class, as.numeric(test_svm_smote))
+```
+
+```{r}
+auc_value <- auc(roc_curve)
+plot(roc_curve, col = '#1f77b4', lwd = 2,
+     main = paste("ROC Curve (AUC =", round(auc_value, 2), ")"),
+     xlab = "False Positive Rate (1 - Specificity)",
+     ylab = "True Positive Rate (Sensitivity)")
+abline(a = 0, b = 1, lty = 2, col = "black")
+legend("bottomright", legend = c("SVM"), col = '#1f77b4', lwd = 2)
+```
+
+## Conclusion
+
+-   The model displays a higher accuracy in discriminating authentic and adulterated ground coffee. 

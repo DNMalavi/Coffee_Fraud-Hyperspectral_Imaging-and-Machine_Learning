@@ -1,0 +1,308 @@
+---
+title: "Stacked Models for Quantifying Coffee Adulteration: Spectral Preprocessing Using SNV, Savitzky-Golay, and Second Derivative"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: "darkly"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+---
+
+## Introduction
+
+Coffee adulteration, such as blending premium Arabica with lower-cost Robusta, undermines quality and authenticity, posing significant challenges for consumers, producers, and regulators. High-dimensional spectroscopic data provides valuable insights for detecting such fraud, but the large number of variables necessitates effective techniques to manage dimensionality and isolate the most relevant wavelengths.
+
+This study employs a stacking ensemble approach that integrates Partial Least Squares (PLS), Elastic Net, and Lasso regressions, with Random Forest (RF) as the meta-learner. Elastic Net regression, a robust technique combining L1 (Lasso) and L2 (Ridge) regularizations, addresses multicollinearity while selecting key spectral features. The stacking approach leverages the individual strengths of these models, with the meta-learner aggregating their predictions to achieve efficient modeling of high-dimensional spectral data, reduce redundancy, and improve prediction accuracy.
+
+```{r}
+# Load libraries
+warning = FALSE  
+  suppressWarnings(suppressMessages({    
+  library(caret) 
+  library(GA)
+  library(glmnet)
+  library(caretEnsemble)
+  library(viridis)
+  library(Boruta)
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(janitor)  
+  library(class)   
+  library(MLmetrics) 
+  library(MLeval)  
+  library(themis)  
+  library(ROSE) 
+  library(parallel)    
+  library(doParallel)    
+  library(foreach)    
+  library(pheatmap)   
+  library(mdatools)    
+  library(nnet)
+  library(DMwR)
+  library(e1071) 
+  library(knitr)
+  library(pROC)
+  library(gridExtra)
+  library(FactoMineR)
+  library(doSNOW)
+  library(MASS)
+  library(factoextra)
+  library(kernlab)}))
+```
+
+## Prepare Data
+
+```{r}
+# Load data: snv_sg_2d spectra
+
+hsi_snv_sg_2d <- read.csv("coffee_ground_snv_sg_2d.csv")
+
+# Ensure we have the same number of dimensions and the range of our columns/covariates
+dim(hsi_snv_sg_2d)
+
+# Check a few column names
+col_check <- colnames(hsi_snv_sg_2d[,c(1:6)])
+col_check
+
+# our response variable (adulteration percentage) is column 4
+# The spectral values start from column # 6 -------> 229
+
+# Convert the adulteration percentage to numeric for compatibility with ML
+hsi_snv_sg_2d$adult_percent <- as.numeric(hsi_snv_sg_2d$adult_percent)
+```
+
+## Get the X and y variables
+
+```{r}
+X <- hsi_snv_sg_2d[,c(6:229)]
+y <- hsi_snv_sg_2d[,4]
+
+class(y) #Ensure y (target variable) is a numeric for regression
+```
+
+## Visualize X
+
+```{r}
+hist(as.matrix(X), col = 'yellowgreen', cex.main = 1.0, cex.axis = 0.8,cex.lab = 1.0,freq = FALSE,
+     main = 'Histogram of Spectral Intensity Values', xlab = 'Intensity'); box()                                    
+```
+
+## Split the Data (Train_Test Split)
+
+-   We want to select features based on training data only to avoid any data leakage that could inflate model performance and make the model less generalizable to unseen data.
+
+```{r}
+# Subset samples for cross-validation and external validation (70/30)
+# Record 1 under cal_val variable is for calibration while 2 will be for testing the model
+
+sample<-hsi_snv_sg_2d$cal_val == 1 
+
+# Split to train and test sets
+X_train <- X[sample,]
+X_test <- X[!sample,]
+y_train <-y[sample]
+y_test <- y[!sample]
+
+# Check length of the subsets for training and validation
+dim(X_train)
+dim(X_test)
+length(y_train)
+length(y_test)
+```
+
+```{r}
+# Merge the test and train data
+train_data <- data.frame(y_train, X_train)
+test_data <- data.frame(y_test, X_test)
+```
+
+## Train Models
+
+```{r}
+# Set random seed for reproducibility
+set.seed (123) 
+
+# Set up the training control(10 folds 10 times cross_validation)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 10, 
+                        savePredictions = "final", 
+                        summaryFunction = defaultSummary,
+                        selectionFunction = 'best', allowParallel = TRUE)
+
+# We used oneSE for classification. For regression, we will use 'best': a model that minimizes RMSECV
+```
+
+```{r}
+#Set the metric as accuracy 
+metric<-"RMSE"
+```
+
+```{r}
+# Hyperparameter set Elastic Net Regression
+# alpha: Set for L1(elastic_net) and L2(Ridge) Regression
+# lambda: Regularization strength (penalty parameter). A sequence of values is tested to identify the best lambda.
+
+grid_enet <- expand.grid( alpha = seq(0, 1, length = 10),  # Explore between Ridge (alpha = 0) and elastic_net (alpha = 1)
+    lambda = seq(0.001, 0.1, length = 10))
+
+# alpha: Set to 1 for LASSO (pure L1 regularization).
+# lambda: Regularization strength (penalty parameter). A sequence of values is tested to identify the best lambda.
+
+grid_lasso <- expand.grid(
+  alpha = 1,   # LASSO (alpha = 1)
+  lambda = seq(0.001, 0.1, length = 10)  
+)
+
+# PLS grid for determining optimal number of LVs (pls components)
+grid_pls <- expand.grid(.ncomp = seq(1,60, by =1))
+
+
+```
+
+# Train Base Learners (Lasso, Elastic Net PLS)
+
+```{r cache=TRUE}
+set.seed(123)
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+# Start_time
+start_time<-Sys.time()
+
+#Train the model using cross-validation (10 folds, 10 times)
+fit_enet_snv_sg_2d<-train(y = train_data[,1], 
+                         x = train_data[,-1],
+                         method = 'glmnet', tuneGrid = grid_enet,
+                         trControl = control, preProcess = c("center","scale"),
+                         metric = metric) 
+
+fit_lasso_snv_sg_2d<-train(y = train_data[,1], 
+                         x = train_data[,-1],
+                         method = 'glmnet', tuneGrid = grid_lasso,
+                         trControl = control, preProcess = c("center","scale"),
+                         metric = metric) 
+
+
+fit_pls_snv_sg_2d<-train(y = train_data[,1], 
+                         x = train_data[,-1],
+                         method = 'pls', tuneGrid = grid_pls,
+                         trControl = control, preProcess = c("center","scale"),
+                         metric = metric) 
+#End_time
+end_time<-Sys.time()
+
+model_training_time<-end_time-start_time
+
+stopCluster(cl) # Stop the parallel run cluster
+
+print(model_training_time)
+```
+
+
+
+```{r cache=TRUE}
+# Make list for the trained models (base learners)
+
+model_list <- list(pls = fit_pls_snv_sg_2d,
+                   enet = fit_enet_snv_sg_2d,
+                   lasso = fit_lasso_snv_sg_2d)
+
+# Stack the models and feed the predictions from cross-validations to a meta-learner (Random Forest)
+
+set.seed(123)
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+# Start_time
+start_time<-Sys.time()
+
+
+fit_stack_ensemble_snv_sg_2d <- caretStack(model_list, method = 'rf', metric = metric,
+                                       trControl = control,tuneLength = 10)
+
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl) # Stop the parallel run cluster
+
+print(model_training_time)
+```
+
+
+
+```{r}
+# Display regression results
+print(fit_stack_ensemble_snv_sg_2d)
+```
+
+#### Best hyperparameters
+
+```{r}
+# Optimal values
+fit_stack_ensemble_snv_sg_2d$ens_model$bestTune
+
+```
+
+
+## Save the models for future use
+
+```{r}
+saveRDS(fit_stack_ensemble_snv_sg_2d, "fit_stack_ensemble_snv_sg_2d.rds")
+```
+
+## Display CV Results in Tables
+
+```{r}
+kable(fit_stack_ensemble_snv_sg_2d$ens_model$results)
+```
+
+
+```{r}
+# Select row for the optimal model
+opt_row <- fit_stack_ensemble_snv_sg_2d$ens_model$results%>% 
+  filter(mtry==fit_stack_ensemble_snv_sg_2d$ens_model$bestTune$mtry)
+
+kable(opt_row)
+```
+
+
+## Test the model performance on test data 
+
+```{r}
+#Predict on the test set 
+observed <- test_data$y_test
+predictions <- predict(fit_stack_ensemble_snv_sg_2d,newdata=test_data)
+
+# Generate predictions
+results <- postResample(predictions, observed)
+
+print(results)
+
+RMSEP = results[[1]]
+R2 = results[[2]]
+MAE = results[[3]]
+
+cat('The RMSEP for the model on external validation is:', RMSEP,'\n')
+cat('The R Squared value for the model is:', R2)
+
+# Calculate Residual Predictive Deviation to check model performance
+
+RPD = sd(observed)/RMSEP
+
+print(paste('The RPD values for the model is', round(RPD,2)))
+```
+
+## Conclusion
+
+- Stacked models demonstrate excellent performance  in predicting adulteration in ground coffee. The model achieves an RPD value of 4.1. The model can make reliable predictions and is suitable for quality control.

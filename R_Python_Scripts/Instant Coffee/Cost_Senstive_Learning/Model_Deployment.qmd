@@ -1,0 +1,93 @@
+---
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: "league"
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+  output_file: "output.html" 
+  keep: always
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+# Load libraries
+warning = FALSE  
+  suppressWarnings(suppressMessages({    
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(janitor)  
+  library(mdatools)    
+  library(nnet)
+  library(knitr)
+  library(gridExtra)}))
+```
+
+```{r}
+## Create a pipeline for spectral preprocessing 
+
+## Load your raw HSI spectra (test_data), then preprocess by MSC/SNV+Savitzky-Golay+2nd derivative
+
+## We will first experiment with MSC+Savitzky-Golay+2nd derivative 
+
+new_data <- read.csv('model_deploy_test_data.csv')
+
+# Get spectral columns
+X_spectral <- new_data[,-c(1)] 
+
+X_data <- as.matrix(X_spectral) # convert to matrix
+```
+
+```{r}
+# Apply MSC
+msc_data <- prep.msc(X_data) 
+
+# Apply Savitxky Golay smoothing and 2nd derivative
+msc_sav_der_data <- prep.savgol(msc_data,width = 13,porder = 2,dorder = 2)
+
+```
+
+```{r}
+msc_sav_der_data[1:3, C(1:5)] # Check a few columns
+```
+
+```{r}
+# Assign it as X_test
+X_test <- msc_sav_der_data
+```
+
+```{r}
+# We will now load our trained models and PCA RDS objects
+
+PCA_object <- readRDS('pca_Preprocess.rds') # PCA
+ranger_model <- readRDS('fit_ranger__cost_sensitive.rds') # model
+```
+
+```{r}
+# Apply PCA with the PCA preprocessed object
+
+X_pca <- predict(PCA_object,X_test)
+
+# Predic the results
+sample_predictions <- predict(ranger_model,newdata = X_pca)
+```
+
+```{r}
+table(sample_predictions)
+```
+
+```{r}
+
+```

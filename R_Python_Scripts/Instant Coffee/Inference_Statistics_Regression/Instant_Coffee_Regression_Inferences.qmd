@@ -1,0 +1,613 @@
+---
+title: "Comparative Analysis of Regression Model Performance for Coffee Adulteration Quantification Using Hyperspectral Imaging: Impact of Preprocessing and Variable Selection - Instant Coffee"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: "darkly"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+execute: 
+  cache: true
+---
+
+## Introduction
+
+This document evaluates the performance of various regression models in detecting Arabica coffee adulteration with Robusta. The analysis focuses on key factors affecting model performance, including:
+
+```         
+- The type of regression model used.
+- Variable or wavelength selection methods, such as Boruta and Genetic Algorithms (GA).
+- The impact of spectral preprocessing techniques.
+```
+
+The models evaluated in this study include Partial Least Squares (PLS), Least Absolute Shrinkage and Selection Operator (LASSO), Ridge Regression, Elastic Net, and ensemble methods. The ensemble models were constructed using a stacking approach, where PLS, LASSO, and Elastic Net served as base learners, and Random Forest was employed as the meta-learner. Model performance was assessed using Root Mean Squared Error (RMSE) values for the test set and Residual Predictive Deviation (RPD) to evaluate predictive accuracy and reliability.
+
+## Load Packages
+
+```{r warning=FALSE}
+suppressWarnings(suppressMessages({
+  library(readxl)
+  library(readr)
+  library(tidyverse)
+  library(dplyr)
+  library(car)
+  library(PMCMRplus)
+  library(ggplot2)
+  library(tidyr)
+  library(skimr)
+  library(janitor)
+  library(lattice)
+  library(dunn.test)
+  library(ARTool)
+  library(emmeans)
+  library(ggpubr)
+  library(ggsci)
+}))
+```
+
+## Part 1: Assess Model Performance (External Validation Set): Based on type of model, variable selection & spectral pre-processing
+
+## Load and Visualize Data
+
+```{r}
+df <- read_excel('summary_model_results_regression_instant_coffee.xlsx')
+
+head(df)
+
+# Change the independent variables to factors
+
+df$Model <- as.factor(df$Model)
+df$Pre_processing <- as.factor(df$Pre_processing)
+df$Variable_Selection <- as.factor(df$Variable_Selection)
+
+# column names 
+colnames(df)
+```
+
+## Check Distribution Using Histograms
+
+```{r warning=FALSE}
+
+histogram(df$RMSEP, 
+          main = 'RMSEP', xlab = 'RMSEP Test Set',
+          cex.main = 1,col = 'lightblue')
+
+histogram(~RPD, data = df, 
+          main = 'RPD',xlab = 'RPD', 
+          cex.main = 0.4, col = 'aquamarine4')
+
+```
+
+```{r warning=FALSE}
+qqnorm(df$RMSEP, 
+       main = 'Q-Q Plot MCC RMSEP', col = "blue") 
+qqline(df$RMSEP)
+
+
+qqnorm(df$RPD, 
+       main = 'Q-Q Plot RPD', col = "red") 
+qqline(df$RPD)
+
+```
+
+-   Based on the histograms and quantile plots, the RMSEP data does not appear to be normally distributed. This can be verified further by the **Shapiro- Wilke Test**.
+
+## Test for Normality
+
+```{r}
+shapiro.test(df$RMSEP) 
+```
+
+```{r}
+shapiro.test(df$RPD) 
+
+# RPD is not normally distibuted 
+```
+
+```{r}
+# Run ANOVA and check the normality of residuals
+aov_model_1 <- aov(RMSEP~Model, data = df)
+
+# Check assumptions
+shapiro.test(residuals(aov_model_1))  # Normality
+leveneTest(RMSEP~Model, data = df)  # Variance homogeneity
+```
+
+```{r}
+colnames(df)
+```
+
+-   The results of the Shapiro-Wilk test (for the residuals) are statistically significant (p < 0.05), providing strong evidence against the assumption of normality. This indicates that the data are not normally distributed. We will therefore consider non-parametric alternatives for RMSEP!
+
+## Check Performance based on Type of Model
+
+-   This section investigates the models PLS, LASSO, Ridge, Elastic Net and stacked models
+
+```{r warning=FALSE}
+# Visualize with box plots for RMSEP
+
+## RPMSEP for different Models
+my_comparisons <- list(c('Ensemble','PLS'))
+                       
+
+ggplot(data = df, aes(x = Model, y = RMSEP))+
+  geom_boxplot(aes(fill = Model), alpha =1)+
+  labs(title = 'Model Performance Based on RMSEP (Instant Coffee)')+
+  ylab('RMSEP (%)')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none'  
+  )+
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+scale_fill_brewer(palette = "Set1", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$RMSEP) * 1.3)
+ 
+ggsave("Model_RMSEP.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+```{r warning=FALSE}
+## RPD for different Models
+my_comparisons <- list(c('Ensemble','PLS'))
+                       
+                       
+
+ggplot(data = df, aes(x = Model, y = RPD))+
+  geom_boxplot(aes(fill = Model), alpha =1)+
+  labs(title = 'Model Performance Based on RPD (Instant Coffee)')+
+  ylab('RPD')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none'  
+  )+
+  scale_fill_brewer(palette = "Set3", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$RPD) * 1.3)
+ 
+ggsave("Model_RPD.png", width = 6, height = 4, dpi = 600, bg = "white")
+ 
+```
+
+### Perform Kruskall-Wallis Test for Model Types
+
+#### Based on RMSEP
+
+```{r}
+kruskal.test(RMSEP~Model, data= df)
+```
+```{r}
+dunn.test(df$RPD, df$Model, method = 'bonferroni')
+```
+
+
+
+-   There is statistical difference in performance for models trained with unbalanced data. We will examine the differences using the **Dunn Test** and **Bonferroni correction**, and later by GLM.
+
+#### Checking for differences in RMSEP based on the type of models
+
+```{r}
+dunn.test(df$RMSEP, df$Model, method = 'bonferroni')
+```
+
+-   Ensemble methods yield significantly lower RMSEP compared to PLS.
+
+### Perform ANOVA based on RPD
+
+```{r}
+anova_results_model <- aov(RPD~Model, data = df)
+summary(anova_results_model)
+```
+
+-   There is a significant difference in model performance based on RPD values.
+
+### Check the differences in RPD for the model types
+
+```{r}
+TukeyHSD(anova_results_model)
+```
+
+-   Ensemble method yield a significantly higher RPD compared to PLS.
+
+## Check Performance based on Variable Selection
+
+-   The models were trained using the full spectra (224 variables) and feature selection methods, including Genetic Algorithm, Recursive Feature Elimination, and Boruta.
+
+```{r}
+# Visualize with box plots RMSEP
+
+df %>% ggplot(aes(x = Variable_Selection, y = RMSEP))+
+  geom_boxplot(aes(fill = Variable_Selection))+
+  labs(title = 'Variable Selection vs RMSEP')+
+  theme(axis.title.x = element_text(color = "black",size= 9),
+        axis.text.x = element_text(color = "black", angle = 90, size= 9),
+        axis.text.y = element_text(color = "black",size =9),
+        axis.title.y = element_text(color = "black",size =9),
+        plot.title = element_text(hjust = 0.5, color = 'black', size = 12))+
+  scale_fill_brewer(palette = "Dark2", name = 'Variable Selection')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=2, color="red")
+```
+
+```{r warning=FALSE}
+
+# Visualize with box plots RPD
+
+df %>% ggplot(aes(x = Variable_Selection, y = RPD))+
+  geom_boxplot(aes(fill = Variable_Selection))+
+  labs(title = 'Variable Selection vs RMSEP')+
+  theme(axis.title.x = element_text(color = "black",size= 9),
+        axis.text.x = element_text(color = "black", angle = 90, size= 9),
+        axis.text.y = element_text(color = "black",size =9),
+        axis.title.y = element_text(color = "black",size =9),
+        plot.title = element_text(hjust = 0.5, color = 'black', size = 12))+
+  scale_fill_brewer(palette = "Dark2", name = 'Variable Selection')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=2, color="red")
+```
+
+### Perform Kruskall-Wallis Test for Variable Selection
+
+#### Check on RMSEP
+
+```{r}
+kruskal.test(RMSEP~Variable_Selection, data= df) 
+```
+
+### Check on RPD
+
+```{r}
+anova_results_var_selection <- aov(RPD~Variable_Selection, data= df)
+print(summary(anova_results_var_selection))
+```
+
+-   There is no statistically significant difference in model performance based on variable selection methods (p > 0.05). This indicates that these techniques effectively identify variables or regions with useful information without compromising model performance. This will, however, be investigated further by General Linear Model (GLM).
+
+## Check Performance based on spectral preprocessing methods
+
+-   The hyperspectral imaging spectra were pre-processed using various techniques, including Standard Normal Variate (SNV) and Multiplicative Scatter Correction (MSC), combined with Savitzky-Golay filtering and derivatives. Unprocessed spectra were used as the baseline for comparison.
+
+```{r warning=FALSE}
+# Visualize with box plots
+
+my_comparisons <- list(c('SNV+SG+1D','SNV+SG+2D'),
+                       c('MSC+SG+1D','SNV+SG+2D'))
+                       
+                      
+                       
+
+ggplot(data = df, aes(x = Pre_processing, y = RMSEP))+
+  geom_boxplot(aes(fill = Pre_processing), alpha =1)+
+  labs(title = 'Model Performance vs Preprocessing Based on RMSEP (Instant Coffee)',
+       x = 'Preprocessing')+
+  ylab('RMSEP (%)')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none'  
+  )+
+  scale_fill_brewer(palette = "RdBu", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$RMSEP) * 1.5)
+ 
+ggsave("Preprocessing_RMSEP.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+```{r warning=FALSE}
+# Visualize with box plots
+
+
+## RPD for different spectral preprocessing
+my_comparisons <- list(c('SNV+SG+1D','SNV+SG+2D'),
+                       c('MSC+SG+1D','SNV+SG+2D'))
+
+ggplot(data = df, aes(x = Pre_processing, y = RPD))+
+  geom_boxplot(aes(fill = Pre_processing), alpha =1)+
+  labs(title = 'Model Performance vs Preprocessing Based on RPD (Instant Coffee)',
+       x='Preprocessing')+
+  ylab('RPD')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none'  
+  )+
+  scale_fill_brewer(palette = "Accent", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$RPD) * 1.5)
+ 
+ggsave("Preprocessing_RPD.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+### Perform Kruskall-Wallis Test for Spectral Preprocessing Techniques (RMSEP)
+
+```{r}
+kruskal.test(RMSEP~Pre_processing, data= df)
+```
+
+-   Spectral preprocessing significantly (p < 0.05) influences the performance of models (based on RMSEP)
+
+#### Checking for differences in pre-processing techniques
+
+```{r}
+dunn.test(df$RMSEP, df$Pre_processing, method = 'bonferroni')
+```
+
+```{r}
+dunnettT3Test(df$RMSEP, df$Pre_processing, method = 'bonferroni')
+```
+
+
+-   There is a statistically significant improvement when using SNV+SG+2D.
+-   SNV+SG+2D shows a significant improvement over SNV+SG+1.
+-   SNV+SG+2D shows a significant improvement over MSC+SG+1D.
+
+### Perform One-way ANOVA Test for Spectral Preprocessing Techniques (RPD)
+
+```{r}
+anova_results_preprocessing <- aov(RPD~Pre_processing, data = df)
+
+summary(anova_results_preprocessing)
+```
+```{r}
+dunn.test(df$RPD, df$Pre_processing, method = 'bonferroni')
+```
+
+
+
+-   The results indicate that spectral preprocessing influence model performance based on RPD.
+
+#### Check the differences in performance (RPD) & spectral preprocessing
+
+```{r}
+TukeyHSD(anova_results_preprocessing)
+```
+
+-   From the findings:
+    -   Models with SNV+SG+2D data yield significantly higher RPDs compared to models with MSC+SG+1D.
+    -   Spectral preprocessing by SNV+SG+2D also yield the best predictive models compared to SNV+SG+1D.
+    -   SNV+SG+2D models also outperform models from unprocessed spectra.
+
+### Verify with General Linear Model (GLM)
+
+#### Fit GLM-RMSEP
+
+```{r}
+glm_model <- glm(RMSEP ~ Model + Pre_processing + Variable_Selection, 
+                 data = df, 
+                 family = gaussian())
+summary(glm_model)
+
+```
+
+#### Pairwise comparisons
+
+```{r}
+# Pairwise comparisons for Model
+emmeans_model <- emmeans(glm_model, ~ Model)
+pairs(emmeans_model, adjust = "bonferroni")  # Bonferroni correction
+
+# Pairwise comparisons for Pre_processing
+emmeans_preprocessing <- emmeans(glm_model, ~ Pre_processing)
+pairs(emmeans_preprocessing, adjust = "bonferroni")
+
+# Pairwise comparisons for Wav_Selec_Reduction
+emmeans_wave <- emmeans(glm_model, ~ Variable_Selection)
+pairs(emmeans_wave, adjust = "bonferroni")
+
+```
+
+#### GLM RMSEP Results
+
+- Preprocessed spectra yields better performance as compared to raw spectra
+- There is no significant difference in performance between the variable selection methods and raw spectra.
+
+```{r}
+# Group by some models
+
+Model_Means <- df %>%
+  dplyr::select(Model, RMSEP) %>%
+  group_by(Model) %>%
+  summarise(
+    Mean_RMSEP = mean(RMSEP, na.rm = TRUE),
+  ) %>% arrange((Mean_RMSEP))
+
+# View the result
+print(Model_Means)
+```
+
+```{r}
+# Group Variable Selection MCC Averages
+model_means_var_selec <- df %>%
+  dplyr::select(Variable_Selection, RMSEP) %>%
+  group_by(Variable_Selection) %>%
+  summarise(
+    Mean_RMSEP = mean(RMSEP, na.rm = TRUE),
+  ) %>% arrange((Mean_RMSEP))
+
+print(model_means_var_selec)
+```
+
+#### Fit GLM-RPD
+
+```{r}
+glm_model_RPD <- glm(RPD ~ Model + Pre_processing + Variable_Selection, 
+                 data = df, 
+                 family = gaussian())
+summary(glm_model_RPD)
+
+```
+```{r}
+ df %>%
+  dplyr::select(Variable_Selection, RPD) %>%
+  group_by(Variable_Selection) %>%
+  summarise(
+    Mean_RPD = mean(RPD, na.rm = TRUE),
+  ) %>% arrange((Mean_RPD))
+```
+
+#### Pairwise comparisons
+
+```{r}
+# Pairwise comparisons for Model
+emmeans_model_RPD <- emmeans(glm_model_RPD, ~ Model)
+pairs(emmeans_model_RPD, adjust = "bonferroni")  # Bonferroni correction
+
+# Pairwise comparisons for Pre_processing
+emmeans_preprocessing_RPD <- emmeans(glm_model_RPD, ~ Pre_processing)
+pairs(emmeans_preprocessing_RPD, adjust = "bonferroni")
+
+# Pairwise comparisons for Wav_Selec_Reduction
+emmeans_wave_RPD <- emmeans(glm_model_RPD, ~ Variable_Selection)
+pairs(emmeans_wave_RPD, adjust = "bonferroni")
+
+```
+
+#### GLM RMSEP Results
+
+-   There is no significant difference in performance between the variable selection methods and raw spectra (based on RPD).
+
+```{r}
+# Group by some models
+
+Model_Means_RPD <- df %>%
+  dplyr::select(Model, RPD) %>%
+  group_by(Model) %>%
+  summarise(
+    Mean_RPD = mean(RPD, na.rm = TRUE),
+  ) %>% arrange(desc(Mean_RPD))
+
+# View the result
+Model_Means_RPD
+```
+
+```{r}
+Prep_Means_RPD <- df %>%
+  dplyr::select(Pre_processing, RPD) %>%
+  group_by(Pre_processing) %>%
+  summarise(
+    Mean_RPD = mean(RPD, na.rm = TRUE),
+  ) %>% arrange(desc(Mean_RPD))
+
+# View the result
+Prep_Means_RPD
+```
+
+```{r}
+Prep_Means_RMSE <- df %>%
+  dplyr::select(Pre_processing, RMSEP) %>%
+  group_by(Pre_processing) %>%
+  summarise(
+    Mean_RMSEP = mean(RMSEP, na.rm = TRUE),
+  ) %>% arrange((Mean_RMSEP))
+
+# View the result
+Prep_Means_RMSE
+```
+
+
+## Conclusions
+
+-   [**Superior Model Performance**]{.underline}: Stacked models consistently show superior performance compared to the other models.
+
+-   [**Impact of Spectral Pre-Processing**]{.underline}: Spectral pre-processing techniques, particularly SNV+SG + 2^nd^ derivative), significantly enhance model performance compared to raw, unprocessed spectra.
+
+-   [**Effectiveness of Feature Selection**]{.underline}: Variable Selection does not compromise model accuracy. The models could therefore be trained on few selected important variables for computational efficiency.
+
+
+
+#### Training Times for the Regression Models
+
+
+```{r}
+kruskal.test(Training_Time~Model, data = df)
+```
+```{r}
+dunn.test(df$Training_Time, df$Model, method = 'bonferroni')
+```
+```{r}
+## Average Training Time
+Avg_Time <- df %>%
+  dplyr::select(Model, Training_Time) %>%
+  group_by(Model) %>%
+  summarise(
+    Mean_TT = mean(Training_Time, na.rm = TRUE),
+  ) %>% arrange(desc(Mean_TT))
+
+# View the result
+Avg_Time
+```
+
+```{r warning=FALSE}
+my_comparisons <- list(c('Ensemble','PLS'),
+                       c('Ensemble','LASSO'),
+                       c('Ensemble','Ridge')
+                       )
+                       
+ggplot(data = df, aes(x = Model, y = Training_Time))+
+  geom_boxplot(aes(fill = Model), alpha =1)+
+  labs(title = 'Model Training Time (instantCoffee)')+
+  ylab('Training Time (secs)')+
+  theme_bw()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 9),  
+    axis.text.x = element_text(color = "black", size = 9),   
+    axis.ticks.x = element_blank(),  
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    plot.title = element_text(hjust = 0.5, color = 'black', size = 10),
+    legend.position = 'none'  
+  )+
+  scale_fill_brewer(palette = "Pastel1", name = 'Model')+ 
+  stat_summary(fun=mean, geom="point", shape=18, size=3, color="black")+
+  stat_compare_means(comparisons = my_comparisons)+
+  stat_compare_means(label.y = max(df$Training_Time) * 1.5)
+ 
+ggsave("Training_Time.png", width = 6, height = 4, dpi = 600, bg = "white")
+```
+
+
+
+```{r}
+dunn.test(df$Training_Time, df$Variable_Selection, method = 'bonferroni')
+```
+

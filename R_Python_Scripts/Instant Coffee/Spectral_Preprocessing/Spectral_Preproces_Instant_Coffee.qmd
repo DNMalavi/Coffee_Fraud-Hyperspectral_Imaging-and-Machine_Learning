@@ -1,0 +1,286 @@
+---
+title: "Part 1: Leveraging Machine Learning and Hyperspectral Imaging for Predicting Adulteration in Instant Arabica Coffee with Robusta: A Focus on Spectral Preprocessing"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_2.txt
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+---
+
+### Introduction
+
+Spectral preprocessing plays a critical role in hyperspectral imaging by enhancing data quality and interpretability for machine learning models. Raw spectral data frequently exhibit noise, baseline shifts, and scattering effects, which obscure differences between pure and adulterated samples, complicating accurate classification.
+
+Techniques such as scatter corrections, smoothing, and derivatives directly address these interferences, improving the signal-to-noise ratio and preserving essential chemical and physical information. These enhancements enable more reliable predictions in detecting adulteration, such as Robusta in Arabica coffee.
+
+This study applied Standard Normal Variate (SNV), Multiplicative Scatter Correction (MSC), and their combination with Savitzky-Golay derivatives (first or second order) using a 13-point window (6 left-side, 6 right-side, and 1 central point) to improve model performance.
+
+```{r}
+# Load packages from the library
+warning = FALSE  
+  suppressWarnings(suppressMessages({    
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(janitor)  
+  library(mdatools)    
+  library(rmarkdown)
+  library(knitr) 
+  library(quarto)
+  library(pander)
+  }))
+```
+
+```{r}
+
+# Set working directory 
+
+setwd("C:/Users/abc/OneDrive - UGent/Documenten/Derick Malavi_PhD Docs_UGent/Manuscript 4_Coffee/Instant_Coffee/Exploratory_Data_Analysis")
+```
+
+```{r}
+
+# Load or import our coffee raw file--->unprocessed
+
+coffee_data_raw <- read.csv('instant_coffee_raw.csv')
+
+dim(coffee_data_raw) # Check the number of rows and columns
+```
+
+```{r}
+
+kable(coffee_data_raw[1:5,c(1:12)])
+```
+
+```{r}
+
+detail_columns <- coffee_data_raw[,c(1:5)]
+
+spectral_columns <- as.matrix(coffee_data_raw[,c(6:229)]) # Extract the spectral columns (numeric)
+```
+
+```{r,echo=TRUE, fig.width=7, fig.height=5}
+
+# Plot the raw spectra
+
+# Define a color mapping for the binary classes
+detail_columns$binary_class <-as.factor(detail_columns$binary_class)
+class_colors <- ifelse(detail_columns$binary_class == "pure_arabica", "blue", "darkred")
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(spectral_columns, type = "l", xlab = 'Wavelength (nm)', 
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topright", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-Raw Spectra", cex.main = 1.0)
+```
+
+```{r}
+
+# Standard Normal Variate Treatment (SNV)
+snv_data_1 <- prep.snv(spectral_columns)
+snv_data <- cbind(detail_columns,snv_data_1)
+kable(snv_data[1:5, c(1:10)])
+```
+
+```{r}
+
+#write.csv(snv_data,file = 'coffee_ground_snv.csv',row.names = FALSE) # save SNV data
+```
+
+```{r}
+
+# Plot Spectra preprocessed by SNV
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(snv_data_1, type = "l", xlab = 'Wavelength (nm)', 
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topright", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-SNV Spectra", cex.main = 1.0)
+```
+
+```{r}
+
+# Multiplicative Scatter Correction (MSC)
+
+msc_data_1 <- prep.msc(spectral_columns)
+msc_data <- cbind(detail_columns,msc_data_1)
+kable(msc_data[1:5, c(1:10)])
+```
+
+```{r}
+
+#write.csv(msc_data,file = 'coffee_ground_msc.csv',row.names = FALSE) # save MSC data
+```
+
+```{r}
+
+# Plot Spectra preprocessed by MSC
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(msc_data_1, type = "l", xlab = 'Wavelength (nm)',
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topright", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-MSC Spectra", cex.main = 1.0)
+```
+
+```{r}
+
+# Use of SNV and Savitzky-Golay First Derivative, Polynomial Order 2 and window of 13 points
+
+snv_sg_1d_data_1 <- prep.savgol(snv_data_1,width = 13,porder = 2,dorder = 1)
+snv_sg_1d <- cbind(detail_columns,snv_sg_1d_data_1)
+kable(snv_sg_1d[1:5, c(1:10)])
+```
+
+```{r}
+
+#write.csv(snv_sg_1d,file = 'coffee_instant_snv_sg_1d.csv',row.names = FALSE) # save SNV_SG_1D_data
+```
+
+```{r}
+
+# Plot Spectra preprocessed by SNV+Savitzky-Golay+1st Derivative (SNV+SG+1D)
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(snv_sg_1d_data_1, type = "l",xlab = 'Wavelength (nm)',
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topright", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-SNV+SG+1st Der. Spectra", cex.main = 1.0)
+```
+
+```{r}
+
+# Use of SNV and Savitzky-Golay Second Derivative, Polynomial Order 2 and window of 13 points
+
+snv_sg_2d_data_1 <- prep.savgol(snv_data_1,width = 13,porder = 2,dorder = 2)
+snv_sg_2d <- cbind(detail_columns,snv_sg_2d_data_1)
+kable(snv_sg_2d[1:5, c(1:10)])
+```
+
+```{r}
+
+#write.csv(snv_sg_2d,file = 'coffee_instant_snv_sg_2d.csv',row.names = FALSE) # save SNV_SG_2D_data
+```
+
+```{r}
+
+# Plot Spectra preprocessed by SNV+Savitzky-Golay+2nd Derivative (SNV+SG+2D)
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(snv_sg_2d_data_1, type = "l", xlab = 'Wavelength (nm)',
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topleft", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-SNV+2nd Deriv. Spectra", cex.main = 1.0)
+```
+
+```{r}
+
+# Use of MSC and Savitzky-Golay First Derivative, Polynomial Order 2 and window of 13 points
+
+msc_sg_1d_data_1 <- prep.savgol(msc_data_1,width = 13,porder = 2,dorder = 1)
+msc_sg_1d <- cbind(detail_columns,msc_sg_1d_data_1)
+kable(msc_sg_1d[1:5, c(1:10)])
+```
+
+```{r}
+
+#write.csv(msc_sg_1d,file = 'coffee_instant_msc_sg_1d.csv',row.names = FALSE) # save MSC_SG_1D_data
+```
+
+```{r}
+
+# Plot Spectra preprocessed by MSC+Savitzky-Golay+1st Derivative (MSC+SG+1D)
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(msc_sg_1d_data_1, type = "l", xlab = 'Wavelength (nm)', 
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topright", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-MSC+SG+1st Der. Spectra", cex.main = 1.0)
+```
+
+```{r}
+
+# Use of MSC and Savitzky-Golay Second Derivative, Polynomial Order 2 and window of 13 points
+
+msc_sg_2d_data_1 <- prep.savgol(msc_data_1,width = 13,porder = 2,dorder = 2)
+msc_sg_2d <- cbind(detail_columns,msc_sg_2d_data_1)
+kable(msc_sg_2d[1:5, c(1:10)])
+```
+
+```{r}
+
+#write.csv(msc_sg_2d,file = 'coffee_instant_msc_sg_2d.csv',row.names = FALSE) # save MSC_SG_2D_data
+```
+
+```{r}
+
+# Plot Spectra preprocessed by MSC+Savitzky-Golay+2nd Derivative (MSC+SG+2D)
+
+# Set the aspect ratio
+par(pin = c(4, 3))  # Width 4 inches, height 3 inches
+
+mdaplot(msc_sg_2d_data_1, type = "l", xlab = 'Wavelength (nm)',
+        ylab = "Reflectance",col = class_colors,show.grid = FALSE)
+
+# Add a legend to the plot
+legend("topleft", legend = c("Pure Arabica", "Adulterated"),
+       col = c("blue", "darkred"), lty = 1, title = "Class", cex = 0.7)
+
+# Add the title 
+title(main = "HSI-MSC+2nd Deriv. Spectra", cex.main = 1.0)
+```
+
+### **Next Steps**
+
+Reduction dimension by **PCA** and unsupervised learning/**clustering** by k-means or **DBSCAN** (Density-Based Spatial Clustering of Applications with Noise) will be explored.

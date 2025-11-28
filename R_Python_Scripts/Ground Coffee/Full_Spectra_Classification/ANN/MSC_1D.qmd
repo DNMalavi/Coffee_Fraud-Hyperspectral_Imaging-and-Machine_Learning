@@ -1,0 +1,576 @@
+---
+title: "Detection of Coffee Adulteration Using Hyperspectral Imaging and Artificial Neural Networks: Spectra Preprocessed by Multiplicative Scatter Correction, Savitzky Golay and First Derivative (MSC+SG+1st Der)"
+freeze: false
+author: "Derick Malavi"
+format: 
+  html:
+    embed-resources: true   
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 3
+    css: css_style_3.txt
+    theme: "darkly"
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm"
+editor_options: 
+  chunk_output_type: inline
+  output: true
+execute: 
+  cache: false
+---
+
+## Introduction
+
+This project utilizes Artificial Neural Networks (ANN) to evaluate the ability to discriminate between authentic and adulterated coffee samples based on spectral data. ANN, with its capacity to model complex and non-linear relationships, is well-suited for high-dimensional datasets such as those derived from spectroscopic analyses. The study aims to determine if the model can effectively distinguish pure coffee from adulterated samples across varying levels of adulteration. By assessing its discriminatory power, this approach seeks to validate ANN's potential as a reliable tool for authenticity verification and quality control in the coffee industry.
+
+```{r}
+# Load libraries
+warning = FALSE  
+  suppressWarnings(suppressMessages({    
+  library(caret) 
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(pls)   
+  library(janitor)  
+  library(class) 
+  library(randomForest)
+  library(MLmetrics) 
+  library(MLeval)  
+  library(themis)  
+  library(ROSE)
+  library(ggthemes)
+  library(parallel)    
+  library(doParallel)    
+  library(foreach)    
+  library(pheatmap)   
+  library(mdatools)    
+  library(nnet)
+  library(e1071) 
+  library(FactoMineR)
+  library(doSNOW)
+  library(MASS)
+  library(factoextra)
+  library(gridExtra)
+  library(pROC)
+  library(NeuralNetTools)
+  library(kernlab)}))
+```
+
+## Load and inspect data: msc_sg_1d spectra
+
+```{r}
+hsi_msc_sg_1d <- read.csv("coffee_ground_msc_sg_1d.csv")
+
+# Ensure we have the same number of dimensions and the range of our columns/covariates
+dim(hsi_msc_sg_1d)
+
+# Check a few column names
+col_check <- colnames(hsi_msc_sg_1d[,c(1:6)])
+col_check
+# The spectral values start from column # 6 -------> 229
+
+# Convert the class to a factor
+hsi_msc_sg_1d$binary_class <- as.factor(hsi_msc_sg_1d$binary_class)
+```
+
+```{r}
+# Get the X and y variables
+X <- hsi_msc_sg_1d[,c(6:229)]
+y <- hsi_msc_sg_1d[,2]
+```
+
+## Visualize X
+
+```{r}
+hist(as.matrix(X), col = 'lightblue',
+     main = 'Histogram of Spectral Intensity Values', xlab = 'Intensity'); box()    
+```
+
+## Split samples into training and test sets
+
+```{r}
+# Subset samples for cross-validation and external validation (70/30)
+# Record 1 under cal_val variable is for calibration while 2 will be for testing the model
+
+sample<-hsi_msc_sg_1d$cal_val== 1 
+
+# Split to train and test sets
+X_train <- X[sample,]
+X_test <- X[!sample,]
+y_train <-y[sample]
+y_test <- y[!sample]
+
+# Check length of the subsets for training and validation
+dim(X_train)
+dim(X_test)
+length(y_train)
+length(y_test)
+
+# Merge the test and train data
+train_data <- data.frame(X_train, binary_class = y_train)
+test_data <- data.frame(X_test, binary_class = y_test)
+
+# Chek composition of the y variable for both train and test sets
+table(train_data$binary_class)
+table(test_data$binary_class)
+```
+
+```{r}
+# Create a bar plot for class distribution in train_data
+train_data %>%
+  count(binary_class) %>%
+  ggplot(aes(x = binary_class, y = n, fill = binary_class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution in Train Data",
+       x = "Class",
+       y = "Count") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Balance the data using SMOTE
+
+```{r}
+# Due to data imbalance, we will use SMOTE to balance the data set
+
+warning = FALSE  
+  suppressWarnings(suppressMessages({
+library(DMwR)  
+}))
+
+
+# Combine the dataset
+smote_data <- SMOTE(binary_class ~ ., data = train_data,
+                    perc.over = 1900, perc.under = 100)
+
+# Check new class distribution
+table(smote_data$binary_class)
+
+# Extract the over sampled data
+X_train_smote <- smote_data[, -ncol(smote_data)]  
+y_train_smote <- smote_data$binary_class    
+```
+
+```{r}
+# Visualize the balanced data 
+
+smote_data %>%
+  count(binary_class) %>%
+  ggplot(aes(x = binary_class, y = n, fill = binary_class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Class Distribution in SMOTE Train Data",
+       x = "Class",
+       y = "Count") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Reduction Dimension (PCA), Centering and Scaling Data
+
+```{r}
+# Reduction dimensionality to eliminate collinearity, centering and scaling
+
+# Imabalanced Data
+pca_Preprocess<- preProcess(train_data, method = c("center", "scale", "pca"))
+data_trainPreprocessed <- predict(pca_Preprocess, train_data)
+data_testPreprocessed <- predict(pca_Preprocess, test_data)
+
+#SMOTE data
+pca_Preprocess_smote<- preProcess(smote_data, method = c("center", "scale", "pca"))
+data_trainPreprocessed_smote <- predict(pca_Preprocess_smote, smote_data)
+data_testPreprocessed_smote <- predict(pca_Preprocess_smote, test_data)
+```
+
+## Set Up Training Parameters
+
+```{r}
+# Set random seed for reproducibility
+
+set.seed (123) 
+
+# Set up the training control(10 folds 10 times cross_validation)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 10, 
+                        classProbs = TRUE, savePredictions = "final", 
+                        summaryFunction = multiClassSummary,
+                        selectionFunction = 'oneSE', allowParallel = TRUE)
+
+# OneSE rule will be used to select simplest yet optimal model within the 'best model'
+```
+
+```{r}
+#Set the metric as accuracy 
+metric<-"Accuracy"
+```
+
+```{r}
+# Detect the number of cores
+num_cores <- detectCores()
+# Print the number of cores
+print(paste("Number of cores available:", num_cores))
+```
+
+```{r}
+# Hyperparameter Tuning
+# Set tune grid to find optimal value of size and decay on cross-validation
+# Size is the number of number of units (neurons) in the hidden layer of the neural network
+# Decay is the regularization parameter; adds penalty to the loss function
+
+grid <- expand.grid(.size=seq(1,10, by =1),.decay=c(0,0.001,0.01,0.1,0.2,0.3,0.4,0.5))
+```
+
+## Train the Models
+
+```{r cache=TRUE}
+
+#Register cluster for caret to train the models in parallel
+set.seed(123)
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+# Start_time
+start_time<-Sys.time()
+
+#Train the model using cross-validation (10 folds, 10 times)
+fit_nnet_msc_sg_1d<-train(binary_class~., data = data_trainPreprocessed, 
+                      method = 'nnet', tuneGrid = grid,
+                      trControl = control, metric = 'Accuracy',
+                      trace = FALSE, MaxNWts = 1000, maxit = 300) #unmodified data
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl) # Stop the parallel run cluster
+
+print(model_training_time)
+
+print(fit_nnet_msc_sg_1d)
+```
+
+```{r cache=TRUE}
+
+#Register cluster for caret to train the models in parallel
+set.seed(123)
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+fit_nnet_smote_msc_sg_1d<-train(binary_class~., data = data_trainPreprocessed_smote,
+                            method ='nnet', tuneGrid = grid,
+                            trControl = control, metric = 'Accuracy',
+                            trace = FALSE, MaxNWts = 1000, maxit = 300)# SMOTE data
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl) # Stop the parallel run cluster
+
+print(model_training_time)
+
+print(fit_nnet_smote_msc_sg_1d)
+```
+
+## Save the models for future use
+
+```{r}
+saveRDS(fit_nnet_msc_sg_1d, "fit_nnet_msc_sg_1d.rds")
+saveRDS(fit_nnet_smote_msc_sg_1d, "fit_nnet_smote_msc_sg_1d.rds")
+```
+
+## Display the cross-validation results
+
+```{r}
+print(paste('The optimal parametrers for training the nnet model are', round(as.numeric(fit_nnet_msc_sg_1d$bestTune$size),2),'neurons','and decay value of',fit_nnet_msc_sg_1d$bestTune$decay)) # unmodified data 
+
+print(paste('The optimal parametrers for training the nnet model are', round(as.numeric(fit_nnet_smote_msc_sg_1d$bestTune$size),2),'neurons','and decay value of',fit_nnet_smote_msc_sg_1d$bestTune$decay)) # SMOTE data 
+```
+
+```{r}
+# Imbalanced data
+knitr::kable(fit_nnet_msc_sg_1d$results)
+```
+
+```{r}
+# Select the best results row 
+selected_row <- fit_nnet_msc_sg_1d$results %>% 
+  filter(size==fit_nnet_msc_sg_1d$bestTune$size & 
+           decay ==fit_nnet_msc_sg_1d$bestTune$decay)
+
+
+knitr::kable(selected_row)
+```
+
+```{r}
+# SMOTE Data
+knitr::kable(fit_nnet_smote_msc_sg_1d$results)
+
+```
+
+```{r}
+# Select the best results row 
+selected_row_smote <- fit_nnet_smote_msc_sg_1d$results %>% 
+  filter(size==fit_nnet_smote_msc_sg_1d$bestTune$size & 
+           decay ==fit_nnet_msc_sg_1d$bestTune$decay)
+
+knitr::kable(selected_row_smote)
+```
+
+## Confusion matrix for the training data
+
+```{r}
+confusionMatrix(fit_nnet_msc_sg_1d$pred$pred,fit_nnet_msc_sg_1d$pred$obs) # unmodified data
+```
+
+```{r}
+confusionMatrix(fit_nnet_smote_msc_sg_1d$pred$pred,fit_nnet_smote_msc_sg_1d$pred$obs) # SMOTE data
+```
+
+Visualize Hyperparameter Tuning for Optimal Model Selection
+
+```{r warning=FALSE}
+# Imbalanced Data
+
+# Get the best accuracy based on best size and decay
+best_size <- fit_nnet_msc_sg_1d$bestTune$size
+best_decay <- fit_nnet_msc_sg_1d$bestTune$decay
+best_accuracy <- fit_nnet_msc_sg_1d$results %>%
+  filter(size == best_size & decay == best_decay) %>%
+  pull(Accuracy)
+
+# Print the best accuracy
+ggplot(fit_nnet_msc_sg_1d, na.rm = TRUE) +
+  geom_vline(
+    xintercept = best_size, 
+    color = "blue", 
+    linetype = "dashed", 
+    size = 0.7
+  ) +
+  geom_hline(
+    yintercept = best_accuracy, 
+    color = "black", 
+    linetype = "dashed", 
+    size = 0.7
+  ) +
+  labs(
+    title = "Hyperparameter Tuning for Neural Network Model",
+    x = "Size",
+    y = "Accuracy"
+  ) +
+  theme_solarized_2() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 9),
+    legend.title = element_text(size = 8)
+  )
+```
+
+```{r warning=FALSE}
+# SMOTE data
+
+# Get the best accuracy based on best size and decay
+best_size <- fit_nnet_smote_msc_sg_1d$bestTune$size
+best_decay <- fit_nnet_smote_msc_sg_1d$bestTune$decay
+best_accuracy <- fit_nnet_smote_msc_sg_1d$results %>%
+  filter(size == best_size & decay == best_decay) %>%
+  pull(Accuracy)
+
+# Print the best accuracy
+ggplot(fit_nnet_smote_msc_sg_1d, na.rm = TRUE) +
+  geom_vline(
+    xintercept = best_size, 
+    color = "blue", 
+    linetype = "dashed", 
+    size = 0.7
+  ) +
+  geom_hline(
+    yintercept = best_accuracy, 
+    color = "black", 
+    linetype = "dashed", 
+    size = 0.7
+  ) +
+  labs(
+    title = "Hyperparameter Tuning for Neural Network Model",
+    x = "Size",
+    y = "Accuracy"
+  ) +
+  theme_solarized_2() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 9),
+    legend.title = element_text(size = 8)
+  )
+```
+
+## Visualize the NNET Model Architecture
+
+```{r}
+# Unmodified data
+plotnet(fit_nnet_msc_sg_1d$finalModel,
+        y_names = 'Class',circle_col = c("lightblue", "pink", 
+        "gold", "green","maroon"),
+        alpha = 0.7,pos_col = "darkgreen",
+        neg_col = "red",cex_val = 0.8,cex_text = 0.7,bord_col = "gray50")
+```
+
+```{r}
+#SMOTE data
+plotnet(fit_nnet_smote_msc_sg_1d$finalModel,
+        y_names = 'Class',circle_col = c("lightblue", "pink", 
+        "gold", "green","maroon"),
+        alpha = 0.7,pos_col = "darkgreen",
+        neg_col = "red",cex_val = 0.8,cex_text = 0.7,bord_col = "gray50")
+```
+
+## Test the model peformance on test data for unbalanced trained data
+
+```{r}
+# Predict on the test set 
+set.seed(123)
+test_nnet_unmodified <- predict(fit_nnet_msc_sg_1d,newdata=data_testPreprocessed)
+
+# Get the confusion matrix
+test_nnet_unmodified_CMtrx <- confusionMatrix(test_nnet_unmodified,
+                                             data_testPreprocessed$binary_class)
+test_nnet_unmodified_CMtrx
+
+knitr::kable(test_nnet_unmodified_CMtrx$byClass)
+
+#View the results as knitr table
+knitr::kable(test_nnet_unmodified_CMtrx$table)
+
+# Calculate the Matthews Correlation coefficient 
+
+# Extracting the components of the confusion matrix
+cf_table_nnet <- test_nnet_unmodified_CMtrx$table
+TP <- cf_table_nnet[1,1]
+TN <- cf_table_nnet[2,2] 
+FP <- cf_table_nnet[2,1] 
+FN <- cf_table_nnet[1,2]
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+```
+
+## Test the model pennetormance on test data using SMOTE trained model
+
+```{r}
+# Predict on the test set 
+set.seed(123)
+test_nnet_smote <- predict(fit_nnet_smote_msc_sg_1d,newdata=data_testPreprocessed_smote)
+
+# Get the confusion matrix
+test_nnet_smote_CMtrx <- confusionMatrix(test_nnet_smote,
+                                             data_testPreprocessed_smote$binary_class)
+test_nnet_smote_CMtrx
+
+knitr::kable(test_nnet_smote_CMtrx$byClass)
+
+#View the results as knitr table
+knitr::kable(test_nnet_smote_CMtrx$table)
+
+# Calculate the Matthews Correlation coefficient 
+
+# Extracting the components of the confusion matrix
+cf_table_nnet_smote <- test_nnet_smote_CMtrx$table
+TP <- cf_table_nnet_smote[1,1]
+TN <- cf_table_nnet_smote[2,2] 
+FP <- cf_table_nnet_smote[2,1] 
+FN <- cf_table_nnet_smote[1,2]
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+```
+
+## Compare the models for unbalanced and balanced data
+
+```{r}
+library(knitr)
+# Compare model pennetormance
+results <- resamples(list(nnet = fit_nnet_msc_sg_1d, nnet_smote = fit_nnet_smote_msc_sg_1d))
+
+# Print summary of re-sampling results
+resample_summary <- summary(results)$statistics
+
+# Convert resampling statistics to a data frame
+resample_df <- do.call(rbind, lapply(resample_summary, function(x) x[, "Mean", drop = FALSE]))
+
+# Create a neat table
+kable(resample_df, caption = "Model Pennetormance Metrics")
+
+# Boxplot for accuracy comparison
+bwplot(results)
+
+# Dotplot for accuracy comparison
+dotplot(results)
+
+# Pairwise comparisons
+model_differences <- diff(results)
+model_differences$statistics
+
+```
+
+## Visualize the confusion matrix tables
+
+```{r}
+p1<-ggplot(data = as.data.frame(test_nnet_unmodified_CMtrx$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix nnet Unbalanced Data')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+p2<-ggplot(data = as.data.frame(test_nnet_smote_CMtrx$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix nnet with SMOTE')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+grid.arrange(p1,p2, nrow =1)
+```
+
+## ROC Curve
+
+```{r}
+
+#SMOTE data
+# Generate the ROC curve
+roc_curve <- roc(data_testPreprocessed_smote$binary_class,
+                 as.numeric(test_nnet_smote),
+                 levels = c("adulterated", "pure_arabica"),
+                 positive = 'adulterated')
+
+
+# Calculate the AUC
+auc_value <- auc(roc_curve)
+
+# Plot the ROC curve
+plot(roc_curve, col = 'blue', lwd = 2,
+     main = paste("ROC Curve (AUC =", round(auc_value, 2), ")"),
+     xlab = "False Positive Rate (1 - Specificity)",
+     ylab = "True Positive Rate (Sensitivity)",
+     xlim = c(0, 1), ylim = c(0, 1))  
+abline(a = 0, b = 1, lty = 2, col = "black")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "dotted")  
+legend("bottomright", legend = c("nnet"), col = 'blue', lwd = 3)
+```
+
+## Conclusion
+
+-   NNET model achieve exceptional performance as observed from the ROC curve.
