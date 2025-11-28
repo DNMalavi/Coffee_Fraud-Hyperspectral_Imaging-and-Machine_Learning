@@ -1,0 +1,13 @@
+name: SpectraVision-Instant-Coffee-Classifier
+title:
+username: dmalavi
+account: dmalavi
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14965707
+bundleId: 11222689
+url: https://dmalavi.shinyapps.io/SpectraVision-Instant-Coffee-Classifier/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app_copy.R|renv.lock|Rprofile.R
