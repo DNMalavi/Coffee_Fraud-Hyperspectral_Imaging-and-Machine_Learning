@@ -1,192 +1,235 @@
-## <center> Detection of Adulteration in Ground Cofee Via Hyperspectral Imaging, Machine Learning and Feature Selection </center> 
+## <center>**Detection of Coffee Adulteration via Hyperspectral Imaging, Chemometrics, and Machine Learning**</center>
 
-**Purpose**: This structure allows focused examination of specific models and their performance under various preprocessing and feature selection methods.
+**Purpose**: This notebook documents the full workflow for detecting and quantifying Robusta adulteration in Arabica coffee using near-infrared hyperspectral imaging (NIR-HSI), chemometric preprocessing, dimensionality reduction, feature selection, classification, regression, and deployment-ready Shiny applications.
 
-## **Overview** 
+## **Abstract**
 
-This project aims to detect and quantify the adulteration of Arabica coffee with Robusta using hyperspectral imaging (HSI) and machine learning techniques. It explores preprocessing, wavelength selection, model optimization, and performance evaluation to establish robust methodologies for food fraud detection.
+Detecting coffee adulteration, particularly in instant coffee, remains challenging due to overlapping spectra and the complexity of the matrix. This study demonstrates the effectiveness of near-infrared hyperspectral imaging (NIR-HSI, 900–1700 nm) combined with chemometrics and machine learning (ML) for detecting and quantifying Robusta adulteration in both ground and instant Arabica coffee.
+
+The analytical workflow integrates chemometric preprocessing, including multiplicative scatter correction (MSC), standard normal variate (SNV), and Savitzky–Golay derivatives, with dimensionality reduction and visualization using principal component analysis (PCA) and t-distributed stochastic neighbor embedding (t-SNE), feature selection through Boruta and genetic algorithm–recursive feature elimination (GA-RFE), and a suite of classification and regression models.
+
+Among preprocessing techniques, SNV and MSC, together with second-order Savitzky–Golay derivatives, consistently yielded the highest classification accuracy. Feature selection improved computational efficiency without compromising performance, with Boruta demonstrating greater computational efficiency and reproducibility than GA-RFE, making it more suitable for routine or multi-instrument deployment.
+
+Classification models, including Linear Discriminant Analysis (LDA), k-nearest neighbors (k-NN), support vector machine (SVM), random forest (RF), artificial neural network (ANN), and stacked ensembles, achieved perfect discrimination (balanced accuracy = 100%, MCC = 1.0) when combined with synthetic minority oversampling (SMOTE). Logistic regression, Ranger, and cost-sensitive SVM models also achieved near-perfect classification under class-weighted learning, providing an alternative that preserves spectral integrity.
+
+For quantification, stacked ensembles attained high predictive accuracy (RMSEP < 7%, RPD > 3.0, R²P ≥ 0.98), with significant improvements observed in ground coffee (p < 0.0001) and consistent performance in instant coffee (p > 0.05). Regularized regressors (LASSO, Ridge, Elastic Net) and partial least squares (PLS) provided efficient alternatives for high-dimensional spectral data.
+
+Overall, this approach integrates classical chemometric techniques with modern ML algorithms to enable accurate, non-destructive screening of fraud in both ground and instant coffee.
+
 
 ### **1. Dataset Preparation**
 
-### **Coffee Samples**:
+### **Coffee Samples**
 
-- Different samples of coffee (Arabica and Robusta) from top 10 leading producing countries. The samples were roasted and lyophilized. Comparison is made between ground and instant coffee. 
+- Different samples of coffee (Arabica and Robusta) sourced from the top 10 producing countries.
+- Coffee samples were roasted at 220°C for 15 minutes.
+- Instant coffee was produced via lyophilization.
+- Both **ground** and **instant** coffee samples were included.
+- Samples were analyzed in triplicate using near-infrared hyperspectral imaging (NIR-HSI, 900–1700 nm).
 
-### **Adulteration Levels**:
+### **Adulteration Levels**
 
-- Adulteration levels included 0%, 1%, 5%, 10%, 20%, 40%, 60%, 80%, and 100% Robusta content.
+- Adulteration levels included: 0%, 1%, 5%, 10%, 20%, 40%, 60%, 80%, and 100% Robusta.
+- **Training set**: 16 Arabica samples mixed with 3 Robusta samples.
+- **Test set**: 9 Arabica samples mixed with 2 Robusta samples.
+- In total, **1470 samples** were formulated and subjected to HSI analysis.
 
-- Training Set: 16 Arabica samples mixed with 3 Robusta samples.
-
-- Test Set: 9 Arabica samples mixed with 2 Robusta samples.
-
-- Samples were analyzed in triplicate using Hyperspectral Imaging (HSI).
-
-- A total of 1470 samples were formulated and subjected to analysis using hyperspectral imaging.
-
-- **Purpose**: To simulate real-world scenarios of coffee adulteration while maintaining diverse sample variability for robust model training and testing.
+**Purpose**: To simulate real-world scenarios of coffee adulteration while maintaining diverse sample variability for robust model training and testing.
 
 ### **2. Spectral Preprocessing**
 
 `Five preprocessing` treatments were applied to enhance signal-to-noise ratio and correct for scattering effects:
 
-- Raw Spectra: Baseline for comparison.
+- **Raw Spectra**  
+  - Used as a baseline for comparison.
 
-- MSC + SG + 1st and 2nd Derivative:
+- **MSC + SG + 1st and 2nd Derivative**
+  - **MSC (Multiplicative Scatter Correction)**: Reduces multiplicative scatter and pathlength effects.
+  - **SG (Savitzky–Golay Smoothing)**: Smoothens spectra and reduces high-frequency noise.
+  - **1st and 2nd Derivatives**: Enhance subtle spectral features and improve separability.
 
-    - MSC (Multiplicative Scatter Correction): Reduces scatter effects.
+- **SNV + 1st and 2nd Derivative**
+  - **SNV (Standard Normal Variate)**: Corrects for scatter and intensity variations across samples.
+  - Derivatives highlight important spectral transitions and reduce baseline effects.
 
-    - SG (Savitzky-Golay Smoothing): Smoothens spectra and removes noise.
-
-    - 1st and 2nd Derivative: Enhances spectral features for better differentiation.
-
-- SNV + 1st and 2nd Derivative:
-
-    - SNV (Standard Normal Variate): Corrects for scatter and intensity variations.
-
-**Purpose** To examine the impact of preprocessing on classification and regression performance.
-
+**Purpose**: To examine the impact of different preprocessing strategies on classification and regression performance, and to identify the most effective pipelines for robust coffee adulteration detection.
 
 ### **3. Dimensionality Reduction**
 
-**Principal Component Analysis (PCA)**
+#### **Principal Component Analysis (PCA)**
 
-- PCA was used to reduce the high-dimensional spectral data into key components.
+- Reduces high-dimensional spectral data into a smaller set of principal components.
+- Minimizes redundancy while preserving most of the variance in the data.
+- Used for:
+  - Exploratory visualization (score plots).
+  - Input to some classifiers.
+  - Understanding class separation structure.
 
-- By retaining the most informative principal components, PCA minimizes redundancy while preserving essential variance in the data.
+#### **t-Distributed Stochastic Neighbor Embedding (t-SNE)**
 
-**Purpose**: To address multicollinearity and reduce computational overhead during model training.
+- Non-linear dimensionality reduction method.
+- Provides 2D or 3D visualizations of complex spectral relationships.
+- Helps reveal non-linear separation between pure and adulterated samples.
+
+**Purpose**: To address multicollinearity, reduce computational overhead, and better visualize the structure of the dataset before supervised modeling.
 
 ### **4. Unsupervised Learning**
 
-**K-Means Clustering**
+#### **K-Means Clustering**
 
-- Applied to the preprocessed spectra for unsupervised classification of adulteration levels.
+- Applied to preprocessed spectra to perform unsupervised grouping.
+- Evaluates how well samples cluster by adulteration level or coffee type.
+- Helps validate:
+  - Effectiveness of preprocessing.
+  - Presence of natural groupings in the data.
 
-- Evaluated cluster separability to identify inherent patterns in the data.
-
-**Purpose**: To explore initial structure in the dataset and validate preprocessing effectiveness.
+**Purpose**: To explore the intrinsic structure of the dataset and provide an unsupervised perspective on separation between pure and adulterated samples.
 
 ### **5. Wavelength Selection**
 
-Two methods were employed to select the most informative wavelengths:
+Two main methods were used to identify informative wavelengths:
 
-- **Boruta**:
+#### **Boruta**
 
-    - Identifies all relevant features by iteratively comparing original and shuffled features.
+- Wrapper method based on Random Forest importance.
+- Identifies all relevant features by comparing real attributes with shadow (randomized) attributes.
+- Provides:
+  - Robustness across resamples.
+  - Good reproducibility.
+  - Improved interpretability of spectral regions.
 
-- **Genetic Algorithm (GA) with Recursive Feature Elimination (RFE)**:
+#### **Genetic Algorithm – Recursive Feature Elimination (GA-RFE)**
 
-    - GA optimizes feature subsets based on fitness scores.
+- **GA**: Searches for optimal subsets of wavelengths using evolutionary optimization.
+- **RFE**: Iteratively removes the least important features to refine the subset.
+- Suitable for:
+  - Aggressive dimensionality reduction.
+  - Discovering compact subsets of key wavelengths.
 
-    - RFE iteratively eliminates less important features to refine the selection.
-
-**Purpose**: To identify critical spectral regions for improving model performance and interpretability.
+**Purpose**: To identify critical spectral regions that drive classification and regression performance, while improving model interpretability and reducing computational costs.
 
 ### **6. Classification**
 
-**Binary Classification Models**
+#### **Binary Classification Task**
 
-Models were trained on three datasets:
+- Objective: Discriminate between **pure Arabica** and **adulterated** samples.
+- Models trained using:
+  1. Full spectra.
+  2. Boruta-selected wavelengths.
+  3. GA-RFE-selected wavelengths.
 
-  1. Full spectra + PCA.
+#### **Models Used**
 
-  2. Boruta-selected wavelengths + PCA.
+- Linear Discriminant Analysis (**LDA**)
+- k-Nearest Neighbors (**k-NN**)
+- Support Vector Machine (**SVM**)
+- Random Forest (**RF**)
+- Artificial Neural Network (**ANN**)
+- **Stacked Ensemble**
+  - Base learners: LDA, k-NN, SVM, RF, ANN.
+  - Meta learner: Random Forest.
 
-  3. GA + RFE-selected wavelengths + PCA.
+#### **Handling Class Imbalance – SMOTE**
 
-**Models Used**:
+- **SMOTE (Synthetic Minority Oversampling Technique)** was applied to address class imbalance.
+- Models were compared:
+  - With SMOTE.
+  - Without SMOTE.
+- **Cost-Sensitive Learning** was also used by assigning higher misclassification cost/weight to the minority class. 
 
-- Linear Discriminant Analysis (LDA)
+#### **Performance Metrics**
 
-- K-Nearest Neighbors (KNN)
-
-- Support Vector Machine (SVM)
-
-- Random Forest (RF)
-
-- Neural Network (NNET)
-
-- Stacked Ensemble:
-
-    - Base Learners: LDA, KNN, SVM, RF, and NNET.
-
-    - Meta Learner: Random Forest.
-    
-
-**SMOTE (Synthetic Minority Over-sampling Technique)**
-
-- Applied to handle class imbalance.
-
-- Models were compared with and without SMOTE to assess its impact.
-
-**Performance Metrics**:
-
-- Matthews Correlation Coefficient (MCC)
-
+- Matthews Correlation Coefficient (**MCC**)
 - Balanced Accuracy
-
-- Sensitivity
-
-- pecificity
-
+- Sensitivity (Recall)
+- Specificity
 - F1 Score
 
-**Purpose**: To identify the best-performing models and preprocessing pipelines for robust classification.
+**Purpose**: To identify high-performing, robust classifiers that can reliably detect adulteration under different preprocessing and feature selection strategies.
 
 ### **7. Regression**
 
-**Regression Models**
+#### **Objective**
 
-Models were trained on:
+- Predict the **percentage of Robusta adulteration** in Arabica coffee.
 
-   1. Full spectra.
+#### **Models Evaluated**
 
-   2. Boruta-selected wavelengths.
+- Partial Least Squares (**PLS**)
+- **LASSO** (Least Absolute Shrinkage and Selection Operator)
+- **Ridge Regression**
+- **Elastic Net**
+- **Stacked Ensemble**
+  - Base learners: PLS, LASSO, Elastic Net.
+  - Meta learner: Random Forest.
 
-   3. GA + RFE-selected wavelengths.
+#### **Input Variants**
 
-**Models Used**:
+- Full spectra.
+- Boruta-selected wavelengths.
+- GA-RFE-selected wavelengths.
 
-- **PLS (Partial Least Squares)**
+#### **Performance Metrics**
 
-- **Penalized Regression**:
+- Root Mean Squared Error (**RMSE**)
+- Ratio of Performance to Deviation (**RPD**)
 
-    - LASSO (Least Absolute Shrinkage and Selection Operator)
+**Purpose**: To develop accurate, quantitative models capable of estimating Robusta adulteration levels in both ground and instant coffee.
 
-    - Ridge Regression
+### **8. Deployment: R Shiny Applications**
 
-    - Elastic Net
+#### **SpectraVision – Cost-Sensitive Classifier**
 
-- **Stacked Ensemble**:
+- Implements cost-sensitive logistic regression and cost-sensitive Random Forest.
+- Designed for binary classification of pure vs adulterated coffee.
+- **Link**: https://dmalavi.shinyapps.io/SpectraVision-Cost-Sensitive-Classifier/
 
-    - Base Learners: LASSO, PLS, Elastic Net.
+#### **SpectraVision – Instant Coffee Classifier**
 
-    - Meta Learner: Random Forest.
+- Classifies instant coffee samples based on PCA-transformed HSI spectra.
+- Uses k-NN and Random Forest for prediction.
+- **Link**: https://dmalavi.shinyapps.io/SpectraVision-Instant-Coffee-Classifier/
 
-**Performance Metrics**:
+#### **SpectraQuant – Instant Coffee Regression App**
 
-- Root Mean Squared Error (RMSE)
+- Predicts the percentage of Robusta adulteration in instant coffee samples.
+- Combines PLS, LASSO/Elastic Net, and stacked regression ensembles.
+- **Link**: https://dmalavi.shinyapps.io/SpectraQuant-Instant-Coffee/
 
-- Ratio of Performance to Deviation (RPD)
+**Purpose**: To translate research models into usable decision-support tools for laboratories, regulators, and industry stakeholders.
 
-**Purpose**: To quantify adulteration levels and evaluate regression performance.
+### **9. Key Insights**
 
-### **8. Results and Insights**
+- SNV and MSC combined with second-order Savitzky–Golay derivatives produced the best classification performance.
+- PCA and t-SNE offered clear visual separation between pure and adulterated samples.
+- Boruta was more computationally efficient and reproducible than GA-RFE for wavelength selection.
+- SMOTE and cost-sensitive learning improved minority class detection and overall robustness.
+- Stacked ensembles outperformed individual models in both classification and regression.
+- Regression models achieved RMSEP < 7, RPD > 3.0, and R² ≥ 0.98 for adulteration prediction.
 
-- Preprocessing significantly impacted model performance, with either SNV or MSC + SG + 2nd derivatives yielding the best results.
+### **10. Conclusion**
 
-- PCA effectively reduced dimensionality while preserving model accuracy.
+This notebook outlines an end-to-end pipeline for coffee fraud detection using hyperspectral imaging, chemometrics, and machine learning. The workflow demonstrates that combining advanced preprocessing, feature selection, and ensemble learning with deployable Shiny tools enables accurate, non-destructive, and scalable screening of adulteration in both ground and instant coffee.
 
-- SMOTE improved performance in imbalanced datasets.
+### **11. Repository structure
 
-- Stacked ensembles frequently outperformed individual models in both classification and regression tasks.
+<img width="771" height="547" alt="image" src="https://github.com/user-attachments/assets/f27b3b33-da62-4851-8ca1-93df64d45643" />
 
-- Boruta and GA provided interpretable wavelength selection, further enhancing model performance.
+## **12. License**
 
-### **9. Conclusion**
+This project is licensed under the **MIT License**.
 
-This study demonstrates the power of hyperspectral imaging and advanced machine learning techniques in detecting and quantifying coffee adulteration. The methodology and findings can be applied to other food fraud detection tasks, contributing to enhanced food safety and authenticity.
+You are free to:
+- Use  
+- Modify  
+- Distribute  
 
+as long as attribution is provided.
 
+A `LICENSE` file has been included in the repository.
 
+## **13. Additional Information**
+
+- All large raw HSI files are intentionally excluded from GitHub due to size limits.
+- Scripts are optimized for reproducibility in R (caret, mdatools, tidyverse ecosystem).
+- Deployment tools are fully functional and accessible online.
