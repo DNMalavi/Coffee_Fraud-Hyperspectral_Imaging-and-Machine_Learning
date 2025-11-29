@@ -16,6 +16,7 @@ For quantification, stacked ensembles attained high predictive accuracy (RMSEP <
 
 Overall, this approach integrates classical chemometric techniques with modern ML algorithms to enable accurate, non-destructive screening of fraud in both ground and instant coffee.
 
+-----
 
 ### **1. Dataset Preparation**
 
@@ -36,6 +37,8 @@ Overall, this approach integrates classical chemometric techniques with modern M
 
 **Purpose**: To simulate real-world scenarios of coffee adulteration while maintaining diverse sample variability for robust model training and testing.
 
+-----
+
 ### **2. Spectral Preprocessing**
 
 `Five preprocessing` treatments were applied to enhance signal-to-noise ratio and correct for scattering effects:
@@ -53,6 +56,8 @@ Overall, this approach integrates classical chemometric techniques with modern M
   - Derivatives highlight important spectral transitions and reduce baseline effects.
 
 **Purpose**: To examine the impact of different preprocessing strategies on classification and regression performance, and to identify the most effective pipelines for robust coffee adulteration detection.
+
+-----
 
 ### **3. Dimensionality Reduction**
 
@@ -72,6 +77,8 @@ Overall, this approach integrates classical chemometric techniques with modern M
 - Helps reveal non-linear separation between pure and adulterated samples.
 
 **Purpose**: To address multicollinearity, reduce computational overhead, and better visualize the structure of the dataset before supervised modeling.
+
+-----
 
 ### **4. Unsupervised Learning**
 
@@ -107,6 +114,8 @@ Two main methods were used to identify informative wavelengths:
   - Discovering compact subsets of key wavelengths.
 
 **Purpose**: To identify critical spectral regions that drive classification and regression performance, while improving model interpretability and reducing computational costs.
+
+-----
 
 ### **6. Classification**
 
@@ -147,6 +156,8 @@ Two main methods were used to identify informative wavelengths:
 
 **Purpose**: To identify high-performing, robust classifiers that can reliably detect adulteration under different preprocessing and feature selection strategies.
 
+-----
+
 ### **7. Regression**
 
 #### **Objective**
@@ -176,6 +187,8 @@ Two main methods were used to identify informative wavelengths:
 
 **Purpose**: To develop accurate, quantitative models capable of estimating Robusta adulteration levels in both ground and instant coffee.
 
+-----
+
 ### **8. Deployment: R Shiny Applications**
 
 #### **SpectraVision – Cost-Sensitive Classifier**
@@ -198,6 +211,8 @@ Two main methods were used to identify informative wavelengths:
 
 **Purpose**: To translate research models into usable decision-support tools for laboratories, regulators, and industry stakeholders.
 
+-----
+
 ### **9. Key Insights**
 
 - SNV and MSC combined with second-order Savitzky–Golay derivatives produced the best classification performance.
@@ -207,13 +222,19 @@ Two main methods were used to identify informative wavelengths:
 - Stacked ensembles outperformed individual models in both classification and regression.
 - Regression models achieved RMSEP < 7, RPD > 3.0, and R² ≥ 0.98 for adulteration prediction.
 
+-----
+
 ### **10. Conclusion**
 
 This notebook outlines an end-to-end pipeline for coffee fraud detection using hyperspectral imaging, chemometrics, and machine learning. The workflow demonstrates that combining advanced preprocessing, feature selection, and ensemble learning with deployable Shiny tools enables accurate, non-destructive, and scalable screening of adulteration in both ground and instant coffee.
 
+-----
+
 ### 11. Repository structure
 
 <img width="771" height="547" alt="image" src="https://github.com/user-attachments/assets/f27b3b33-da62-4851-8ca1-93df64d45643" />
+
+-----
 
 ## **12. License**
 
@@ -228,8 +249,12 @@ as long as attribution is provided.
 
 A `LICENSE` file has been included in the repository.
 
+-----
+
 ## **13. Additional Information**
 
 - All large raw HSI files are intentionally excluded from GitHub due to size limits.
 - Scripts are optimized for reproducibility in R (caret, mdatools, tidyverse ecosystem).
 - Deployment tools are fully functional and accessible online.
+
+-----
