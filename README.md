@@ -211,7 +211,7 @@ Two main methods were used to identify informative wavelengths:
 
 This notebook outlines an end-to-end pipeline for coffee fraud detection using hyperspectral imaging, chemometrics, and machine learning. The workflow demonstrates that combining advanced preprocessing, feature selection, and ensemble learning with deployable Shiny tools enables accurate, non-destructive, and scalable screening of adulteration in both ground and instant coffee.
 
-### **11. Repository structure
+### 11. Repository structure
 
 <img width="771" height="547" alt="image" src="https://github.com/user-attachments/assets/f27b3b33-da62-4851-8ca1-93df64d45643" />
 
